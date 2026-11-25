@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Copy an Anki collection into omanki's deck library, once.
+"""Copy an Anki collection into omengram's deck library, once.
 
-    tools/import_anki.py                       # into ~/.local/share/omanki
+    tools/import_anki.py                       # into ~/.local/share/omengram
     tools/import_anki.py --dry-run
     tools/import_anki.py --force               # replace files already there
 
 Each Anki deck becomes a file and `::` becomes a folder, so the tree in Anki is
 the tree in the picker. Cards are rendered through their own templates, which is
 what makes custom note types and clozes come out right, and flattened to plain
-text, which is all omanki draws. Tags come along, apart from Anki's own `leech`
+text, which is all omengram draws. Tags come along, apart from Anki's own `leech`
 and `marked`.
 
-Scheduling does not: every card starts as new, on omanki's schedule, and nothing
+Scheduling does not: every card starts as new, on omengram's schedule, and nothing
 is ever written back. The collection is copied to a private temporary directory
 and only that copy is opened. Anki has to be closed, because a copy taken while
 it is writing might not be a whole one.
@@ -20,7 +20,7 @@ Every card carries an id made from its note, so importing again, or moving a
 deck's file, keeps the progress made on it here.
 
 Needs Anki's Python library; the official Linux build's own is used if it is at
-/usr/local/share/anki (or $OMANKI_ANKI_DIR).
+/usr/local/share/anki (or $OMENGRAM_ANKI_DIR).
 """
 
 import argparse
@@ -35,10 +35,10 @@ import sys
 import tempfile
 from html.parser import HTMLParser
 
-ANKI_DIR = os.environ.get("OMANKI_ANKI_DIR", "/usr/local/share/anki")
+ANKI_DIR = os.environ.get("OMENGRAM_ANKI_DIR", "/usr/local/share/anki")
 ANKI_BASE = os.path.expanduser("~/.local/share/Anki2")
 
-# omanki reads at most 256 KiB of a file, so a deck is split before it gets
+# omengram reads at most 256 KiB of a file, so a deck is split before it gets
 # there. The other parts become children of the first, which keeps the deck one
 # thing to pick.
 PART_LIMIT = 250_000
@@ -47,7 +47,7 @@ DROP_TAGS = {"leech", "marked"}
 
 # ------------------------------------------------------------------- text
 #
-# Anki renders cards as HTML for a web view. omanki draws plain text, so the
+# Anki renders cards as HTML for a web view. omengram draws plain text, so the
 # rendered question and answer are flattened: styles and scripts dropped, block
 # elements turned into line breaks, list items into bullets, media into a
 # marker so a card that relies on an image does not look silently empty.
@@ -268,7 +268,7 @@ def write(root, files):
     for rel, cards in files.items():
         path = os.path.join(root, rel)
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=".omanki.", dir=os.path.dirname(path))
+        fd, tmp = tempfile.mkstemp(prefix=".omengram.", dir=os.path.dirname(path))
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"cards": cards}, f, ensure_ascii=False, indent=2)
             f.write("\n")
@@ -305,7 +305,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--profile", default="User 1", help="Anki profile (default: %(default)s)")
     ap.add_argument("--collection", help="path to a collection.anki2, instead of a profile")
-    ap.add_argument("-o", "--output", default="~/.local/share/omanki", help="library (default: %(default)s)")
+    ap.add_argument("-o", "--output", default="~/.local/share/omengram", help="library (default: %(default)s)")
     ap.add_argument("--force", action="store_true", help="replace deck files that already exist")
     ap.add_argument("--dry-run", action="store_true", help="say what would be written, and write nothing")
     args = ap.parse_args()
@@ -317,7 +317,7 @@ def main():
         sys.exit("Anki is open. Close it first, so the copy is a whole one.")
 
     report = Report()
-    with tempfile.TemporaryDirectory(prefix="omanki-import-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="omengram-import-") as tmp:
         col = open_copy(source, tmp)
         try:
             files = files_for(collect(col, report))

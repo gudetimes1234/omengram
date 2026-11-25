@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "yamz8.omanki",
-  "name": "omanki",
-  "version": "1.10.0",
-  "author": "yamz8",
+  "id": "gudetimes.omengram",
+  "name": "omengram",
+  "version": "1.0.0",
+  "author": "gudetimes",
   "license": "MIT",
   "description": "Spaced-repetition flashcards in the bar",
   "kinds": [
@@ -12,11 +12,11 @@
   ],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "Omanki.qml",
+    "overlay": "Omengram.qml",
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "omanki",
+    "displayName": "omengram",
     "description": "Review flashcards without leaving the bar",
     "category": "Plugin",
     "defaultSection": "right",
@@ -37,7 +37,7 @@
         "type": "path",
         "label": "Deck library",
         "defaultValue": "",
-        "description": "Directory of deck files. Leave empty for ~/.local/share/omanki."
+        "description": "Directory of deck files. Leave empty for ~/.local/share/omengram."
       },
       {
         "key": "deck",

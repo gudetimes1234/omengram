@@ -19,7 +19,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "tools", "import_anki.py")
-ANKI_PKGS = os.path.join(os.environ.get("OMANKI_ANKI_DIR", "/usr/local/share/anki"), "app_packages")
+ANKI_PKGS = os.path.join(os.environ.get("OMENGRAM_ANKI_DIR", "/usr/local/share/anki"), "app_packages")
 if os.path.isdir(ANKI_PKGS):
     sys.path.insert(0, ANKI_PKGS)
 sys.path.insert(0, os.path.dirname(SCRIPT))
@@ -31,7 +31,7 @@ import import_anki as imp  # noqa: E402
 
 class ImportTest(unittest.TestCase):
     def setUp(self):
-        self.dir = tempfile.mkdtemp(prefix="omanki-test-")
+        self.dir = tempfile.mkdtemp(prefix="omengram-test-")
         self.out = os.path.join(self.dir, "lib")
         self.path = os.path.join(self.dir, "collection.anki2")
         col = self.col = Collection(self.path)

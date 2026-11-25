@@ -26,7 +26,7 @@ Item {
   readonly property string deckRel: Anki.relativeToHome(root.deckPath, root.home)
   readonly property string dirRel: Anki.relativeToHome(root.deckDir, root.home)
   readonly property string progressRel:
-      Anki.relativeToHome(root.stateDir + "/omanki.json", root.home)
+      Anki.relativeToHome(root.stateDir + "/omengram.json", root.home)
   property int newPerDay: 20
   // 0 means no cap. A limit you have not set should not be a limit of nothing.
   property int reviewsPerDay: 0
@@ -429,7 +429,7 @@ Item {
 
   Process {
     id: lister
-    command: ["sh", "-c", Anki.LIST_SH, "omanki-list", root.home, root.dirRel]
+    command: ["sh", "-c", Anki.LIST_SH, "omengram-list", root.home, root.dirRel]
     stdout: StdioCollector { id: listing; waitForEnd: true }
     onExited: {
       var base = root.dirRel
@@ -481,7 +481,7 @@ Item {
   Process {
     id: deckReader
     property string rel: ""
-    command: ["sh", "-c", Anki.READ_SH, "omanki-deck", root.home, deckReader.rel]
+    command: ["sh", "-c", Anki.READ_SH, "omengram-deck", root.home, deckReader.rel]
     stdout: StdioCollector { id: deckText; waitForEnd: true }
     onExited: {
       var f = root.incoming[root.incomingAt]
@@ -501,7 +501,7 @@ Item {
 
   Process {
     id: progressReader
-    command: ["sh", "-c", Anki.READ_SH, "omanki-progress", root.home, root.progressRel]
+    command: ["sh", "-c", Anki.READ_SH, "omengram-progress", root.home, root.progressRel]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -544,7 +544,7 @@ Item {
   // hands the result to the writer.
   Process {
     id: merger
-    command: ["sh", "-c", Anki.READ_SH, "omanki-merge", root.home, root.progressRel]
+    command: ["sh", "-c", Anki.READ_SH, "omengram-merge", root.home, root.progressRel]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -572,7 +572,7 @@ Item {
   Process {
     id: writer
     property string document: ""
-    command: ["sh", "-c", Anki.WRITE_SH, "omanki-write", root.home, root.progressRel]
+    command: ["sh", "-c", Anki.WRITE_SH, "omengram-write", root.home, root.progressRel]
     stdinEnabled: true
     onStarted: {
       write(document)
@@ -618,7 +618,7 @@ Item {
   function refuseAdd(reason) {
     root.addError = reason
     root.adding = false
-    console.log("omanki: add refused: " + reason)
+    console.log("omengram: add refused: " + reason)
   }
 
   function addCard(front, back, tags) {
@@ -632,7 +632,7 @@ Item {
 
   Process {
     id: deckEditReader
-    command: ["sh", "-c", Anki.READ_SH, "omanki-deck-edit", root.home, root.addRel]
+    command: ["sh", "-c", Anki.READ_SH, "omengram-deck-edit", root.home, root.addRel]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -656,7 +656,7 @@ Item {
   Process {
     id: deckWriter
     property string document: ""
-    command: ["sh", "-c", Anki.WRITE_SH, "omanki-deck-write", root.home, root.addRel]
+    command: ["sh", "-c", Anki.WRITE_SH, "omengram-deck-write", root.home, root.addRel]
     stdinEnabled: true
     onStarted: {
       write(document)

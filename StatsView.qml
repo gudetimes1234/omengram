@@ -31,7 +31,7 @@ Item {
   property color urgent: Color.urgent
   property string fontFamily: Style.font.family
 
-  // Which tab is showing. Owned by Omanki.qml, which also owns the strip that
+  // Which tab is showing. Owned by Omengram.qml, which also owns the strip that
   // changes it — the strip rides on the section header, well above this, so one
   // property read by both beats a value bound in two directions between them.
   property int tab: 0

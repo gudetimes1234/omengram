@@ -1,22 +1,16 @@
-<p align="center">
-  <img src="logo.png" width="96" alt="">
-</p>
-
-<h1 align="center">omanki</h1>
-
-<p align="center">
-  <a href="https://github.com/yamz8/omanki/actions/workflows/tests.yml">
-    <img src="https://github.com/yamz8/omanki/actions/workflows/tests.yml/badge.svg" alt="tests">
-  </a>
-</p>
+# omengram
 
 Spaced-repetition flashcards in the Omarchy bar, scheduled the way Anki
 schedules them.
 
-This is a fork of [yamz8/omanki](https://github.com/yamz8/omanki). It adds a
-library of decks, and a picker in the bar panel for which decks and tags to
-study and how much of each a day. It keeps the plugin id, so it installs in
-place of the original rather than beside it.
+It studies a library of decks, with a picker in the bar panel for which decks
+and tags to study and how much of each a day, and can start from a copy of your
+Anki collection.
+
+omengram is a fork of [yamz8/omanki](https://github.com/yamz8/omanki) (MIT),
+which the scheduler, the two surfaces and the file handling come from. It is its
+own plugin, with its own id, decks and progress, so the two can be installed
+side by side.
 
 There are two surfaces onto the same cards:
 
@@ -29,24 +23,20 @@ one is answered in the other. Either way the loop is the same: question, space
 to reveal, then one of four grades, each labelled with when the card would
 come back.
 
-https://github.com/user-attachments/assets/5f6f7fe7-9a2c-4d74-9281-ffa86d0405d3
-
-*The bar panel, mid-session — a deck of Omarchy's own keybindings.*
-
-[Introducing omanki →](https://x.com/yamzeight/status/2099811274179625152)
+![Choosing decks in omengram](preview.png)
 
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/gudetimes1234/omanki.git --enable
+omarchy plugin add https://github.com/gudetimes1234/omengram.git --enable
 ```
 
-That clones the repo into `~/.config/omarchy/plugins/yamz8.omanki/`, validates
+That clones the repo into `~/.config/omarchy/plugins/gudetimes.omengram/`, validates
 it against the plugin manifest schema, and offers to place the bar widget. To
 update later:
 
 ```bash
-omarchy plugin update yamz8.omanki
+omarchy plugin update gudetimes.omengram
 ```
 
 A fresh install has no deck, so the panel opens on `No cards yet`. The repo
@@ -54,9 +44,9 @@ ships one to start from — 33 cards covering Omarchy's own keybindings and
 commands, which is what the plugin was written to learn:
 
 ```bash
-mkdir -p ~/.local/share/omanki
-cp ~/.config/omarchy/plugins/yamz8.omanki/cards.example.json \
-   ~/.local/share/omanki/cards.json
+mkdir -p ~/.local/share/omengram
+cp ~/.config/omarchy/plugins/gudetimes.omengram/cards.example.json \
+   ~/.local/share/omengram/cards.json
 ```
 
 Copying it is the only time anything places a deck for you; the plugin itself
@@ -94,7 +84,7 @@ The overlay studies the same selection. The header names it (`NEW · infra ·
 
 Copies every Anki deck into the library once, deck tree and tags included. Cards
 are rendered through their own templates and flattened to plain text; pictures
-become `[image]`. **They start as new cards on omanki's schedule and nothing is
+become `[image]`. **They start as new cards on omengram's schedule and nothing is
 written back to Anki** — only a temporary copy of the collection is opened, and
 Anki has to be closed. Existing files are not replaced without `--force`. Cards
 carry an id made from their note, so importing again keeps their progress.
@@ -105,19 +95,17 @@ carry an id made from their note, so importing again keeps their progress.
 that, or want it somewhere else:
 
 ```bash
-omarchy bar put yamz8.omanki --section right
+omarchy bar put gudetimes.omengram --section right
 ```
 
-Or add `{ "id": "yamz8.omanki" }` to a section of `bar.layout` in
+Or add `{ "id": "gudetimes.omengram" }` to a section of `bar.layout` in
 `~/.config/omarchy/shell.json` by hand.
 
 The overlay has no default keybind. In `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + CTRL + J", "omanki", "omarchy-shell shell toggle yamz8.omanki")
+o.bind("SUPER + CTRL + J", "omengram", "omarchy-shell shell toggle gudetimes.omengram")
 ```
-
-![omanki reviewing a card in the fullscreen overlay](preview.png)
 
 Pick that key with care. `SUPER + CTRL + M` looks free and is not — it sits one
 modifier key away from Omarchy's stock `SUPER + SHIFT + M` "Music" binding, and
@@ -255,7 +243,7 @@ survive an in-app add.
 
 ## Your decks
 
-Decks are the `.json` files under `~/.local/share/omanki`, yours to edit. A
+Decks are the `.json` files under `~/.local/share/omengram`, yours to edit. A
 folder is a parent: `infra/backend.json` is the deck `infra › backend`, and
 `infra.json` beside the folder holds the parent's own cards. Files are found up
 to eight levels down; links, dotfiles and anything over 256 KiB are not read. A
@@ -287,7 +275,7 @@ changed, and the old schedule was earned answering a different one. Set an
 explicit `"id"` on a card if you want to edit a front and keep its progress.
 
 Scheduling progress is kept separately, in
-`~/.local/state/omarchy/omanki.json`, so nothing the plugin writes can clobber
+`~/.local/state/omarchy/omengram.json`, so nothing the plugin writes can clobber
 the deck you are writing by hand. Deleting that file resets every card to new
 and leaves your deck alone.
 
@@ -304,7 +292,7 @@ hot-reloads on save.
 
 | Setting | Default | Does |
 |---------|---------|------|
-| `deckDir` | `~/.local/share/omanki` | The library. `~` is expanded. |
+| `deckDir` | `~/.local/share/omengram` | The library. `~` is expanded. |
 | `deck` | *(none)* | Study this one file instead of the library. |
 | `decks` | *(all)* | Decks to study, by id. Set from the picker. |
 | `limits` | *(none)* | Per-deck limits, `{ "id": { "new": 10, "reviews": 50 } }`. Set from the picker. |
@@ -317,7 +305,7 @@ hot-reloads on save.
 | `leechSuspend` | `true` | Take a leech out of the rotation rather than only marking it. |
 
 ```json
-{ "id": "yamz8.omanki", "newPerDay": 10, "decks": ["spanish"], "tags": ["verbs"] }
+{ "id": "gudetimes.omengram", "newPerDay": 10, "decks": ["spanish"], "tags": ["verbs"] }
 ```
 
 `reviewsPerDay` caps only *reviews* — cards that existed before today. Cards
@@ -414,7 +402,7 @@ the other side changes.
 A card that keeps being forgotten becomes a **leech**. Past some number of
 lapses the card is the problem rather than your memory — the question is
 ambiguous, or it is really two facts sharing one front — and grinding it every
-few days costs more than it returns. At eight lapses omanki marks the card and
+few days costs more than it returns. At eight lapses omengram marks the card and
 takes it out of the rotation; it is raised again every four lapses after that,
 so a leech you decide to keep does not nag on every slip. Both numbers follow
 Anki's.
@@ -441,14 +429,14 @@ answered at 1am counts toward the day you are still awake in. That is what the
 `~/.config/omarchy/shell.json` to Omarchy's defaults, and a third-party plugin
 is enabled by the presence of its id in that file — the shell's storage rules
 put it plainly: *a third-party plugin is enabled iff its id appears somewhere
-in shell.json*. Resetting the file takes omanki's entry with it, so the bar
+in shell.json*. Resetting the file takes omengram's entry with it, so the bar
 glyph goes and `Super + Ctrl + J` stops responding too; a disabled plugin is
 never summoned, and the only trace is one line in the shell's log. Nothing is
 lost — your deck and your progress are separate files and are untouched. Put
 it back with:
 
 ```bash
-omarchy plugin enable yamz8.omanki
+omarchy plugin enable gudetimes.omengram
 ```
 
 The config you had before is saved next to the new one as
@@ -475,10 +463,10 @@ only the shell's own `qs.Ui` and `qs.Commons` modules.
 
 Worth knowing before you point this at your notes.
 
-**`~/.local/state/omarchy/omanki.json`** — scheduling progress, written on
+**`~/.local/state/omarchy/omengram.json`** — scheduling progress, written on
 every answer. Entirely the plugin's own file.
 
-**The decks in `~/.local/share/omanki`**. A card added with `a` goes to the deck
+**The decks in `~/.local/share/omengram`**. A card added with `a` goes to the deck
 of the card on screen, and the composer says which. Only ever appended to, and
 only when you add a card through the `a` composer. If you never use it, the
 plugin never writes your deck at all. When it does:
@@ -527,16 +515,16 @@ HTML should survive intact, so safety belongs to the renderer.
 ## Remove
 
 ```bash
-omarchy plugin remove yamz8.omanki
+omarchy plugin remove gudetimes.omengram
 ```
 
-That deletes `~/.config/omarchy/plugins/yamz8.omanki/` and drops the plugin's
+That deletes `~/.config/omarchy/plugins/gudetimes.omengram/` and drops the plugin's
 entry from `~/.config/omarchy/shell.json`, taking the bar widget with it.
 
 Three things it does not touch, so remove them by hand if you want them gone:
 
-- your deck, at `~/.local/share/omanki/cards.json`
-- your scheduling progress, at `~/.local/state/omarchy/omanki.json`
+- your decks, in `~/.local/share/omengram`
+- your scheduling progress, at `~/.local/state/omarchy/omengram.json`
 - any keybind you added to `~/.config/hypr/bindings.lua`
 
 ## Tests
@@ -605,7 +593,7 @@ write, so a fixed sleep tests the machine's mood rather than the plugin.
 | `StudyPicker.qml` | Decks, tags and limits, behind `d` in the bar panel. |
 | `tools/import_anki.py` | Copies an Anki collection into the library, once. |
 | `Panel.qml` | The bar widget and the panel chrome around the session. |
-| `Omanki.qml` | The fullscreen overlay chrome around the same session. |
+| `Omengram.qml` | The fullscreen overlay chrome around the same session. |
 
 `Reviewer` and `GradeButtons` know nothing about what is hosting them — the
 host owns sizing — so the rules and the review loop exist once rather than once
@@ -618,4 +606,4 @@ come due unattended or the other surface has been answering them.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The original is by [yamz8](https://github.com/yamz8/omanki).

@@ -29,7 +29,7 @@ Item {
   readonly property int cornerRadius: Style.cornerRadius
   readonly property int contentMargin: Style.spacing.panelPadding
 
-  readonly property string pluginId: (root.manifest && root.manifest.id) || "yamz8.omanki"
+  readonly property string pluginId: (root.manifest && root.manifest.id) || "gudetimes.omengram"
 
   // ------------------------------------------------------------- settings
   // Overlays are not handed a `settings` object the way bar widgets are, so
@@ -166,7 +166,7 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "yamz8-omanki"
+    WlrLayershell.namespace: "gudetimes-omengram"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
@@ -271,7 +271,7 @@ Item {
 
           PanelHero {
             width: parent.width
-            title: "omanki"
+            title: "omengram"
             meta: {
               if (reviewer.phase === "loading") return "Loading"
               if (reviewer.phase === "error") return "Deck error"

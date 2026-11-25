@@ -1,4 +1,4 @@
-// Scheduling and deck logic for omanki. Kept free of QML types so the
+// Scheduling and deck logic for omengram. Kept free of QML types so the
 // algorithm is readable on its own and testable under plain node, leaving the
 // .qml files as presentation only.
 
@@ -676,7 +676,7 @@ function scopeLabel(decks, tags) {
 // Where the library is, resolved like the deck path.
 function resolveDeckDir(configured, home) {
   var path = text(configured).replace(/\/+$/, "")
-  if (!path) return home + "/.local/share/omanki"
+  if (!path) return home + "/.local/share/omengram"
   if (path.slice(0, 2) === "~/") return home + path.slice(1)
   return path
 }
@@ -1585,7 +1585,7 @@ var WRITE_SH = [
   'done',
   'unset IFS',
   PIN_SH,
-  't=$(mktemp "/proc/self/fd/9/.omanki.XXXXXX") || exit 71',
+  't=$(mktemp "/proc/self/fd/9/.omengram.XXXXXX") || exit 71',
   'chmod 600 "$t" || { rm -f "$t"; exit 72; }',
   'cat > "$t" || { rm -f "$t"; exit 73; }',
   'mv -f "$t" "/proc/self/fd/9/$name" || { rm -f "$t"; exit 74; }'
@@ -1622,7 +1622,7 @@ function serializeProgress(progress) {
 // Anything else is passed through exactly as given.
 function resolveDeck(configured, home) {
   var path = text(configured)
-  if (!path) return home + "/.local/share/omanki/cards.json"
+  if (!path) return home + "/.local/share/omengram/cards.json"
   if (path === "~") return home
   if (path.slice(0, 2) === "~/") return home + path.slice(1)
   return path

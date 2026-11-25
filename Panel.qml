@@ -10,8 +10,8 @@ import "Anki.js" as Anki
 // coordination, and IPC.
 Panel {
   id: root
-  moduleName: "yamz8.omanki"
-  ipcTarget: "yamz8.omanki"
+  moduleName: "gudetimes.omengram"
+  ipcTarget: "gudetimes.omengram"
 
   // Bar widgets are handed their inline shell.json entry, so `setting()` from
   // the Panel base is all the config plumbing this surface needs.
@@ -136,7 +136,7 @@ Panel {
     dimmed: root.pending === 0
     tooltipText: root.pending > 0
         ? root.pending + " card" + (root.pending === 1 ? "" : "s") + " to review"
-        : "omanki — nothing due"
+        : "omengram — nothing due"
     onPressed: function(buttonCode) { root.toggle() }
   }
 
@@ -211,7 +211,7 @@ Panel {
 
         PanelHero {
           width: parent.width
-          title: "omanki"
+          title: "omengram"
           meta: {
             if (reviewer.phase === "loading") return "Loading"
             if (reviewer.phase === "error") return "Deck error"

@@ -1,12 +1,12 @@
 # Study picker
 
-Choose what omanki studies from the bar panel: decks and subdecks, tags, and
+Choose what omengram studies from the bar panel: decks and subdecks, tags, and
 daily limits. Before this, all three meant editing `shell.json` by hand, and
-omanki read one deck file.
+omengram read one deck file.
 
 ## What changes for the user
 
-- **A deck library.** Every `*.json` under `~/.local/share/omanki` (`deckDir`)
+- **A deck library.** Every `*.json` under `~/.local/share/omengram` (`deckDir`)
   is a deck, and folders are parents: `infra/backend.json` is the deck
   `infra/backend`. `infra.json` beside `infra/` holds the parent's own cards.
   Setting `deck` still means exactly that one file.

@@ -1,4 +1,4 @@
-// Scheduler and deck tests for the omanki plugin.
+// Scheduler and deck tests for the omengram plugin.
 //
 //   node tests/scheduler.test.mjs
 //
@@ -451,8 +451,8 @@ group("adding a card to the deck")
 
 group("splitting a deck path for the writer")
 {
-  t("directory", G.dirOf("/home/u/.local/share/omanki/cards.json") === "/home/u/.local/share/omanki")
-  t("file name", G.baseOf("/home/u/.local/share/omanki/cards.json") === "cards.json")
+  t("directory", G.dirOf("/home/u/.local/share/omengram/cards.json") === "/home/u/.local/share/omengram")
+  t("file name", G.baseOf("/home/u/.local/share/omengram/cards.json") === "cards.json")
   t("a bare name has no directory", G.baseOf("cards.json") === "cards.json")
   t("a root-level file keeps a valid directory", G.dirOf("/cards.json") === "/")
 }
@@ -545,7 +545,7 @@ group("answers carry the stamps a merge needs")
 
 group("settings are read from wherever the plugin is configured")
 {
-  const id = "yamz8.omanki"
+  const id = "gudetimes.omengram"
   t("from the bar layout",
     G.findEntry({ bar: { layout: { right: [{ id, newPerDay: 5 }] } } }, id).newPerDay === 5)
   t("from the plugins list",
@@ -557,9 +557,9 @@ group("settings resolution is shared by both surfaces")
 {
   const HOME = "/home/u"
   t("an unset deck falls back to the default",
-    G.resolveDeck("", HOME) === HOME + "/.local/share/omanki/cards.json")
+    G.resolveDeck("", HOME) === HOME + "/.local/share/omengram/cards.json")
   t("an undefined deck falls back too",
-    G.resolveDeck(undefined, HOME) === HOME + "/.local/share/omanki/cards.json")
+    G.resolveDeck(undefined, HOME) === HOME + "/.local/share/omengram/cards.json")
   t("a leading ~/ expands", G.resolveDeck("~/notes/spanish.json", HOME) === HOME + "/notes/spanish.json")
   t("a bare ~ expands", G.resolveDeck("~", HOME) === HOME)
   t("an absolute path is left alone", G.resolveDeck("/srv/decks/a.json", HOME) === "/srv/decks/a.json")
@@ -583,28 +583,28 @@ group("settings resolution is shared by both surfaces")
 // of the path, not merely at the file itself.
 
 const sh = (script, home, rel, input) =>
-  spawnSync("sh", ["-c", script, "omanki", home, rel],
+  spawnSync("sh", ["-c", script, "omengram", home, rel],
             { input: input ?? "", encoding: "utf8" })
 
-const REL = ".local/state/omarchy/omanki.json"
+const REL = ".local/state/omarchy/omengram.json"
 const CHAIN = [".local", ".local/state", ".local/state/omarchy"]
 
 // A home with the chain already present, so a test can replace one link of it.
 function makeHome() {
-  const home = mkdtempSync(join(tmpdir(), "omanki-home-"))
+  const home = mkdtempSync(join(tmpdir(), "omengram-home-"))
   mkdirSync(join(home, ".local/state/omarchy"), { recursive: true })
   return home
 }
 
 function makeDecoy() {
-  const dir = mkdtempSync(join(tmpdir(), "omanki-decoy-"))
-  writeFileSync(join(dir, "omanki.json"), "untouched\n")
+  const dir = mkdtempSync(join(tmpdir(), "omengram-decoy-"))
+  writeFileSync(join(dir, "omengram.json"), "untouched\n")
   return dir
 }
 
 group("writing creates its own chain, privately")
 {
-  const home = mkdtempSync(join(tmpdir(), "omanki-fresh-"))
+  const home = mkdtempSync(join(tmpdir(), "omengram-fresh-"))
   const doc = G.serializeProgress({ reviews: {} })
   const r = sh(G.WRITE_SH, home, REL, doc)
 
@@ -614,14 +614,14 @@ group("writing creates its own chain, privately")
   for (const d of CHAIN)
     t(`${d} is created private`, (statSync(join(home, d)).mode & 0o777) === 0o700)
   t("no temp file is left behind",
-    readdirSync(join(home, ".local/state/omarchy")).filter((f) => f.startsWith(".omanki.")).length === 0)
+    readdirSync(join(home, ".local/state/omarchy")).filter((f) => f.startsWith(".omengram.")).length === 0)
 }
 
 group("directories that already exist keep their modes")
 {
   // ~/.local and ~/.config are shared with every other application. Tightening
   // them because a flashcard plugin happened to walk past would be overreach.
-  const home = mkdtempSync(join(tmpdir(), "omanki-modes-"))
+  const home = mkdtempSync(join(tmpdir(), "omengram-modes-"))
   mkdirSync(join(home, ".local"), { recursive: true, mode: 0o755 })
   chmodSync(join(home, ".local"), 0o755)
 
@@ -649,9 +649,9 @@ group("a symlink planted at any component redirects nothing")
 
     t(`write is refused when ${component} is a symlink`, w.status === 65)
     t(`  the decoy file is untouched (${component})`,
-      readFileSync(join(decoy, "omanki.json"), "utf8") === "untouched\n")
+      readFileSync(join(decoy, "omengram.json"), "utf8") === "untouched\n")
     t(`  no temp file is stranded beside the decoy (${component})`,
-      readdirSync(decoy).filter((f) => f.startsWith(".omanki.")).length === 0)
+      readdirSync(decoy).filter((f) => f.startsWith(".omengram.")).length === 0)
     t(`  read is refused too (${component})`, r.status === 65 && r.stdout === "")
   }
 }
@@ -661,16 +661,16 @@ group("a symlinked file, and a file where a directory belongs")
   const home = makeHome()
   const decoy = makeDecoy()
 
-  symlinkSync(join(decoy, "omanki.json"), join(home, REL))
+  symlinkSync(join(decoy, "omengram.json"), join(home, REL))
   t("a symlinked target file is refused on read", sh(G.READ_SH, home, REL).status === 65)
 
   const w = sh(G.WRITE_SH, home, REL, '{"reviews":{}}\n')
   t("but a write replaces the symlink instead of following it", w.status === 0)
-  t("the decoy is untouched", readFileSync(join(decoy, "omanki.json"), "utf8") === "untouched\n")
+  t("the decoy is untouched", readFileSync(join(decoy, "omengram.json"), "utf8") === "untouched\n")
   t("and the destination is now a real file",
     !lstatSync(join(home, REL)).isSymbolicLink())
 
-  const home2 = mkdtempSync(join(tmpdir(), "omanki-file-"))
+  const home2 = mkdtempSync(join(tmpdir(), "omengram-file-"))
   mkdirSync(join(home2, ".local"), { recursive: true })
   writeFileSync(join(home2, ".local/state"), "i am not a directory\n")
   t("a regular file where a directory belongs is refused",
@@ -690,7 +690,7 @@ group("paths that walk out of home are refused before any work")
   t("containment is decided before the shell runs",
     G.relativeToHome("/etc/passwd", "/home/u") === "")
   t("a contained path is returned relative",
-    G.relativeToHome("/home/u/.local/share/omanki/cards.json", "/home/u") === ".local/share/omanki/cards.json")
+    G.relativeToHome("/home/u/.local/share/omengram/cards.json", "/home/u") === ".local/share/omengram/cards.json")
   t("home itself is not a file", G.relativeToHome("/home/u", "/home/u") === "")
   t("a sibling that merely shares a prefix is refused",
     G.relativeToHome("/home/user2/deck.json", "/home/u") === "")
@@ -703,7 +703,7 @@ group("paths that walk out of home are refused before any work")
 
 group("reading, when there is simply nothing there")
 {
-  const home = mkdtempSync(join(tmpdir(), "omanki-empty-"))
+  const home = mkdtempSync(join(tmpdir(), "omengram-empty-"))
   t("an unwalked chain reads as empty, not as an error",
     (() => { const r = sh(G.READ_SH, home, REL); return r.status === 0 && r.stdout === "" })())
 
@@ -1256,19 +1256,19 @@ group("the library listing")
   t("a reserved id is not a library deck", !l.some((x) => x.id.startsWith("gleamdrill:")))
   t("an empty listing is no decks", eq(G.parseListing(""), []))
   t("the library defaults and expands ~",
-    G.resolveDeckDir("", "/h") === "/h/.local/share/omanki" &&
+    G.resolveDeckDir("", "/h") === "/h/.local/share/omengram" &&
     G.resolveDeckDir("~/d/", "/h") === "/h/d" && G.resolveDeckDir("/x", "/h") === "/x")
 }
 
 group("the library is listed without following anything")
 {
   const home = makeHome()
-  const LIB = ".local/share/omanki"
+  const LIB = ".local/share/omengram"
   t("an absent library lists as nothing",
     (() => { const r = sh(G.LIST_SH, home, LIB); return r.status === 0 && r.stdout === "" })())
   mkdirSync(join(home, LIB, "infra/[a] *deep"), { recursive: true })
   mkdirSync(join(home, LIB, ".hidden"))
-  for (const f of ["cards.json", "infra/backend.json", "infra/[a] *deep/x y.json", ".omanki.abc.json",
+  for (const f of ["cards.json", "infra/backend.json", "infra/[a] *deep/x y.json", ".omengram.abc.json",
                    ".hidden/h.json", "readme.md", "bad\nname.json"])
     writeFileSync(join(home, LIB, f), "{}")
   const decoy = makeDecoy()
@@ -1283,7 +1283,7 @@ group("the library is listed without following anything")
     sh(G.READ_SH, home, LIB + "/infra/[a] *deep/x y.json").stdout === "{}")
 
   for (const link of [".local", ".local/share", LIB]) {
-    const h = mkdtempSync(join(tmpdir(), "omanki-home-"))
+    const h = mkdtempSync(join(tmpdir(), "omengram-home-"))
     mkdirSync(join(h, dirname(link)), { recursive: true })
     symlinkSync(decoy, join(h, link))
     t(`a symlink at ${link} is refused`, sh(G.LIST_SH, h, LIB).status === 65)
@@ -1438,6 +1438,19 @@ group("where a new card goes")
 group("settings are found wherever the widget sits")
 for (const s of ["left", "centerBegin", "center", "centerEnd", "right", "tray"])
   t("in " + s, G.findEntry({ bar: { layout: { [s]: [{ id: "p", tags: ["x"] }] } } }, "p").tags?.[0] === "x")
+
+// This is a fork installed beside the plugin it came from. Anything that still
+// answers to that plugin's name shares its decks, its progress or its IPC, and
+// merging from it is how one gets back in.
+group("nothing answers to the plugin this was forked from")
+{
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..")
+  const shipped = ["manifest.json", ...readdirSync(root).filter((f) => /\.(qml|js)$/.test(f)),
+    ...readdirSync(join(root, "tools")).filter((f) => f.endsWith(".py")).map((f) => "tools/" + f)]
+  t("there are files to check", shipped.length > 10)
+  for (const f of shipped)
+    t(f, !/omanki|yamz8/i.test(readFileSync(join(root, f), "utf8")))
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

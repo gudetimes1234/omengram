@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Integration soak for the omanki surfaces.
+# Integration soak for the omengram surfaces.
 #
 #   tests/soak.sh
 #
@@ -27,8 +27,8 @@ set -uo pipefail
 # where it was invoked from.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-PLUGIN=yamz8.omanki
-STATE="$HOME/.local/state/omarchy/omanki.json"
+PLUGIN=gudetimes.omengram
+STATE="$HOME/.local/state/omarchy/omengram.json"
 STATE_DIR="$(dirname "$STATE")"
 
 # The settings group edits the real shell.json, for the same reason the add
@@ -53,7 +53,7 @@ resolve_deck() {
   python3 - "$CONFIG" "$PLUGIN" "$HOME" <<'DECKPY'
 import json, sys
 config, plugin, home = sys.argv[1], sys.argv[2], sys.argv[3]
-default = home + "/.local/share/omanki/cards.json"
+default = home + "/.local/share/omengram/cards.json"
 
 configured = ""
 try:
@@ -168,7 +168,7 @@ expect_soon() { # label expected probe-arg
 # rather than passing quietly.
 refused_since() { # pattern since
   journalctl --user --since "$2" --no-pager 2>/dev/null \
-    | grep -F "omanki: add refused:" \
+    | grep -F "omengram: add refused:" \
     | grep -qiE "$1"
 }
 
@@ -181,7 +181,7 @@ expect_refusal() { # label pattern since
   bad "$label — nothing matching /$pattern/ was logged"
   echo "         refusals logged since ${since}:"
   journalctl --user --since "$since" --no-pager 2>/dev/null \
-    | grep -F "omanki: add refused:" | tail -3 | sed "s/^/           /" \
+    | grep -F "omengram: add refused:" | tail -3 | sed "s/^/           /" \
     || echo "           (none at all)"
 }
 
@@ -622,21 +622,21 @@ if [ -z "$shell_pid" ]; then
   hung=0   # no shell running; nothing of ours can be stuck
 else
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    hung="$(pgrep -P "$shell_pid" -fc 'omanki-write|omanki-merge' 2>/dev/null || true)"
+    hung="$(pgrep -P "$shell_pid" -fc 'omengram-write|omengram-merge' 2>/dev/null || true)"
     hung="${hung:-0}"
     [ "$hung" -eq 0 ] && break
     sleep 1
   done
 fi
 expect "no writer or merger left hung" 0 "$hung"
-stray="$(find "$STATE_DIR" -maxdepth 1 -name '.omanki.*' 2>/dev/null | wc -l)"
+stray="$(find "$STATE_DIR" -maxdepth 1 -name '.omengram.*' 2>/dev/null | wc -l)"
 expect "no temp files stranded" 0 "$stray"
 
 reset
 
 group "the shell logged no errors from this plugin"
 errs="$(journalctl --user --since "$SINCE" --no-pager 2>/dev/null \
-  | grep -iE "omanki|CardComposer|StatsView|Reviewer\.qml" \
+  | grep -iE "omengram|CardComposer|StatsView|Reviewer\.qml" \
   | grep -iE "TypeError|ReferenceError|Cannot read|is not a function|Unable to assign|non-existent" \
   | head -5)"
 if [ -z "$errs" ]; then
