@@ -558,7 +558,8 @@ function normalizeTags(wanted) {
 // Narrowing a session to part of a deck is what makes a card's tags worth
 // carrying. No filter means the whole deck; with one, a card is kept if it
 // carries any of the wanted tags, so ["omarchy", "spanish"] is a union rather
-// than a card needing both.
+// than a card needing both. Tags nest with "::" the way Anki's do, and asking
+// for a parent asks for everything under it.
 function filterByTags(cards, wanted) {
   var want = normalizeTags(wanted)
   if (!want.length) return cards || []
@@ -568,7 +569,7 @@ function filterByTags(cards, wanted) {
   for (var i = 0; i < list.length; i++) {
     var tags = list[i].tags || []
     for (var j = 0; j < tags.length; j++) {
-      if (want.indexOf(text(tags[j]).toLowerCase()) !== -1) {
+      if (pathMatches(text(tags[j]).toLowerCase(), want, TAG_SEP)) {
         kept.push(list[i])
         break
       }
@@ -579,7 +580,7 @@ function filterByTags(cards, wanted) {
 
 // The one-line state summary above the card. Both surfaces render it, so it is
 // written once here rather than twice in QML.
-function sectionLabel(phase, state, tags) {
+function sectionLabel(phase, state, tags, decks) {
   var head
   if (phase !== "reviewing") head = "SESSION"
   else if (state.phase === "new") head = "NEW"
@@ -589,8 +590,472 @@ function sectionLabel(phase, state, tags) {
   else
     head = "REVIEW  ·  " + formatInterval(state.interval) + "  ·  ease " + (state.ease / 1000).toFixed(2)
 
-  var want = normalizeTags(tags)
-  return want.length ? head + "  ·  #" + want.join(" #") : head
+  var scope = scopeLabel(decks, tags)
+  return scope ? head + "  ·  " + scope : head
+}
+
+// ------------------------------------------------------------------ library
+//
+// The library is a directory of deck files. A deck's id is its path under that
+// directory without the extension, so folders are parents: `infra/backend.json`
+// is the deck `infra/backend`, and `infra.json` beside the folder holds the
+// parent's own cards. Ids are opaque everywhere else - nothing but the tree
+// functions here looks inside one.
+
+var DECK_SEP = "/"
+var TAG_SEP = "::"
+
+// Set aside for a deck source that is not a file. A library file may not claim
+// it, or a selection could come to mean something else later.
+var RESERVED_DECK = "gleamdrill:"
+
+// What a selection entry may say besides a plain id: `infra/.` is the deck
+// `infra` without the decks under it. It exists so that unticking one child of
+// a ticked parent can leave everything else the parent held.
+function ownOnly(id, sep) {
+  return id + sep + "."
+}
+
+// Is `id` covered by one selection entry?
+function covers(entry, id, sep) {
+  return entry === id || entry === ownOnly(id, sep) || id.indexOf(entry + sep) === 0
+}
+
+// Is `id` in the selection? No selection means everything is.
+function pathMatches(id, selected, sep) {
+  if (!selected || !selected.length) return true
+  for (var i = 0; i < selected.length; i++)
+    if (covers(selected[i], id, sep)) return true
+  return false
+}
+
+function deckMatches(id, selected) {
+  return pathMatches(id, selected, DECK_SEP)
+}
+
+function normalizeDecks(value) {
+  var out = []
+  if (value === undefined || value === null) return out
+  var list = Array.isArray(value) ? value : [value]
+  for (var i = 0; i < list.length; i++) {
+    var id = text(list[i])
+    if (id && out.indexOf(id) === -1) out.push(id)
+  }
+  return out
+}
+
+function lastPart(id, sep) {
+  var parts = id.split(sep)
+  return parts[parts.length - 1] === "." ? parts[parts.length - 2] : parts[parts.length - 1]
+}
+
+// What is being studied, short enough for a header: one thing is named, more
+// are counted.
+function scopeLabel(decks, tags) {
+  var d = normalizeDecks(decks)
+  var t = normalizeTags(tags)
+  var parts = []
+  if (d.length === 1) parts.push(lastPart(d[0], DECK_SEP))
+  else if (d.length) parts.push(d.length + " decks")
+  if (t.length > 3) parts.push(t.length + " tags")
+  else if (t.length) parts.push("#" + t.map(function(x) {
+    return x.slice(-TAG_SEP.length - 1) === TAG_SEP + "." ? x.slice(0, -TAG_SEP.length - 1) : x
+  }).join(" #"))
+  return parts.join("  ·  ")
+}
+
+// Where the library is, resolved like the deck path.
+function resolveDeckDir(configured, home) {
+  var path = text(configured).replace(/\/+$/, "")
+  if (!path) return home + "/.local/share/omanki"
+  if (path.slice(0, 2) === "~/") return home + path.slice(1)
+  return path
+}
+
+// LIST_SH's output: one `mtime<TAB>size<TAB>path` per line. The stamp is what
+// lets a reload skip files that have not changed since they were last parsed.
+function parseListing(raw) {
+  var out = []
+  var lines = String(raw || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var f = lines[i].split("\t")
+    if (f.length !== 3 || f[2].slice(-5) !== ".json") continue
+    var id = f[2].slice(0, -5)
+    // A name that is empty, or reserved, or that would read as the own-only
+    // form cannot be selected unambiguously, so it is not a deck.
+    var parts = id.split(DECK_SEP)
+    if (parts.some(function(p) { return !text(p) || p !== p.trim() || p === "." })) continue
+    if (id.indexOf(RESERVED_DECK) === 0) continue
+    out.push({ id: id, path: f[2], stamp: f[0] + ":" + f[1] })
+  }
+  out.sort(function(a, b) { return comparePaths(a.id, b.id, DECK_SEP) })
+  return out
+}
+
+// Component by component, so a deck's children follow it directly rather than
+// being separated from it by a sibling whose name sorts before the separator.
+function comparePaths(a, b, sep) {
+  var x = a.toLowerCase().split(sep)
+  var y = b.toLowerCase().split(sep)
+  for (var i = 0; i < x.length && i < y.length; i++) {
+    if (x[i] < y[i]) return -1
+    if (x[i] > y[i]) return 1
+  }
+  if (x.length !== y.length) return x.length - y.length
+  return a < b ? -1 : (a > b ? 1 : 0)
+}
+
+// Rows for a tree of paths, parents before children. A parent that is only
+// implied by its children is given a row of its own, marked `own: false`.
+function buildTree(ids, sep) {
+  var known = {}
+  var i
+  for (i = 0; i < ids.length; i++) {
+    var parts = ids[i].split(sep)
+    for (var n = 1; n < parts.length; n++) {
+      var up = parts.slice(0, n).join(sep)
+      if (!Object.prototype.hasOwnProperty.call(known, up)) known[up] = false
+    }
+    known[ids[i]] = true
+  }
+
+  var all = Object.keys(known)
+  all.sort(function(a, b) { return comparePaths(a, b, sep) })
+  return all.map(function(id) {
+    var p = id.split(sep)
+    return {
+      id: id,
+      name: p[p.length - 1],
+      depth: p.length - 1,
+      parent: p.slice(0, -1).join(sep),
+      own: known[id]
+    }
+  })
+}
+
+function buildDeckTree(decks) {
+  return buildTree((decks || []).map(function(d) { return d.id }), DECK_SEP)
+}
+
+// on | some | off. "some" is a parent with part of it picked.
+function nodeState(id, selected, sep) {
+  if (!selected || !selected.length) return "off"
+  var some = false
+  for (var i = 0; i < selected.length; i++) {
+    var entry = selected[i]
+    if (entry === id || id.indexOf(entry + sep) === 0) return "on"
+    if (entry === ownOnly(id, sep) || entry.indexOf(id + sep) === 0) some = true
+  }
+  return some ? "some" : "off"
+}
+
+// Flip one row. Ticking a row takes its whole subtree; unticking a row its
+// parent was ticked for keeps the rest of that parent. Ticking the last of a
+// parent's children puts the parent back as one entry, so a deck added to that
+// folder later is included the way a ticked parent implies.
+//
+// Entries for decks that are gone are dropped on the way through. Unticking
+// the last row leaves nothing selected, which means everything.
+function toggleNode(rows, selected, id, sep) {
+  var list = (selected || []).filter(function(entry) {
+    return rows.some(function(r) { return entry === r.id || entry === ownOnly(r.id, sep) })
+  })
+  var state = nodeState(id, list, sep)
+
+  function childrenOf(parent) {
+    return rows.filter(function(r) { return r.parent === parent && r.id !== parent })
+  }
+  function rowOf(rid) {
+    for (var i = 0; i < rows.length; i++) if (rows[i].id === rid) return rows[i]
+    return null
+  }
+
+  if (state === "on") {
+    if (list.indexOf(id) !== -1) return list.filter(function(e) { return e !== id })
+
+    // Ticked through an ancestor: split that ancestor down to this row.
+    var out = []
+    for (var i = 0; i < list.length; i++) {
+      var entry = list[i]
+      if (id.indexOf(entry + sep) !== 0) { out.push(entry); continue }
+      var at = entry
+      while (at !== id) {
+        var row = rowOf(at)
+        if (row && row.own) out.push(ownOnly(at, sep))
+        var next = at
+        childrenOf(at).forEach(function(c) {
+          if (c.id === id || id.indexOf(c.id + sep) === 0) next = c.id
+          else out.push(c.id)
+        })
+        if (next === at) break
+        at = next
+      }
+    }
+    return out
+  }
+
+  // Ticking: this row now stands for everything under it.
+  list = list.filter(function(e) {
+    return e !== ownOnly(id, sep) && e.indexOf(id + sep) !== 0
+  })
+  list.push(id)
+
+  // Fold upward while a parent is wholly covered.
+  var r = rowOf(id)
+  while (r && r.parent) {
+    var up = rowOf(r.parent)
+    if (!up) break
+    var whole = childrenOf(up.id).every(function(c) { return list.indexOf(c.id) !== -1 })
+        && (!up.own || list.indexOf(ownOnly(up.id, sep)) !== -1)
+    if (!whole) break
+    var upId = up.id
+    list = list.filter(function(e) {
+      return e !== ownOnly(upId, sep) && e.indexOf(upId + sep) !== 0
+    })
+    list.push(upId)
+    r = up
+  }
+  return list
+}
+
+function toggleDeck(rows, selected, id) {
+  return toggleNode(rows, normalizeDecks(selected), id, DECK_SEP)
+}
+
+function toggleTag(rows, selected, id) {
+  return toggleNode(rows, normalizeTags(selected), id, TAG_SEP)
+}
+
+// Each card remembers the deck it came from, for limits and for the composer.
+function assignDeck(cards, id) {
+  return (cards || []).map(function(c) {
+    return { id: c.id, front: c.front, back: c.back, tags: c.tags, deck: id }
+  })
+}
+
+// The cards in scope. Duplicates are dropped after the decks are chosen, not
+// before: the same card in two decks is one schedule, but it has to turn up
+// whichever of the two is picked.
+function mergeDecks(decks, selected) {
+  var out = []
+  var seen = {}
+  var list = decks || []
+  for (var i = 0; i < list.length; i++) {
+    if (!deckMatches(list[i].id, selected)) continue
+    var cards = list[i].cards || []
+    for (var j = 0; j < cards.length; j++) {
+      if (Object.prototype.hasOwnProperty.call(seen, cards[j].id)) continue
+      seen[cards[j].id] = true
+      out.push(cards[j])
+    }
+  }
+  return out
+}
+
+// The deck tree with what is waiting in each, parents including their
+// children. These are what is there, before any daily limit.
+function deckRows(decks, progress, now) {
+  var rows = buildDeckTree(decks)
+  var at = {}
+  rows.forEach(function(r) { r.total = 0; r.due = 0; r.fresh = 0; at[r.id] = r })
+
+  ;(decks || []).forEach(function(d) {
+    var total = 0, due = 0, fresh = 0
+    ;(d.cards || []).forEach(function(c) {
+      var s = stateFor(progress || emptyProgress(), c.id)
+      total++
+      if (s.suspended) return
+      if (s.phase === "new") fresh++
+      else if (s.due <= now) due++
+    })
+    var parts = d.id.split(DECK_SEP)
+    for (var n = 1; n <= parts.length; n++) {
+      var r = at[parts.slice(0, n).join(DECK_SEP)]
+      r.total += total; r.due += due; r.fresh += fresh
+    }
+  })
+  return rows
+}
+
+// The tags on these cards as a tree, with how many cards each would give. A
+// card tagged `sd::caching` and `sd::messaging` is one card under `sd`.
+function tagRows(cards) {
+  var ids = {}
+  var totals = {}
+  ;(cards || []).forEach(function(c) {
+    var mine = {}
+    ;(c.tags || []).forEach(function(tag) {
+      var id = text(tag).toLowerCase()
+      // An empty component would make a row nothing could name.
+      if (!id || id.split(TAG_SEP).some(function(p) { return !p || p === "." })) return
+      ids[id] = true
+      var parts = id.split(TAG_SEP)
+      for (var n = 1; n <= parts.length; n++) mine[parts.slice(0, n).join(TAG_SEP)] = true
+    })
+    for (var id in mine) totals[id] = (totals[id] || 0) + 1
+  })
+  var rows = buildTree(Object.keys(ids), TAG_SEP)
+  rows.forEach(function(r) { r.total = totals[r.id] || 0 })
+  return rows
+}
+
+// ------------------------------------------------------------------- limits
+//
+// `newPerDay` and `reviewsPerDay` cap the whole day. `limits` caps one deck, or
+// a parent and everything under it:
+//
+//   { "infra/backend": { "new": 10, "reviews": 50 } }
+//
+// Absent is no cap. Unlike the overall `reviewsPerDay`, where 0 means no cap,
+// a deck's 0 means none today: there is already a way to say "no cap" here.
+
+function limitValue(v) {
+  if (v === undefined || v === null || v === "") return null
+  var n = Math.round(Number(v))
+  return isFinite(n) && n >= 0 ? n : null
+}
+
+function normalizeLimits(value) {
+  var out = {}
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out
+  for (var id in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, id)) continue
+    var key = text(id)
+    var v = value[id]
+    if (!key || !v || typeof v !== "object") continue
+    var fresh = limitValue(v["new"])
+    var reviews = limitValue(v.reviews)
+    if (fresh === null && reviews === null) continue
+    out[key] = {}
+    if (fresh !== null) out[key]["new"] = fresh
+    if (reviews !== null) out[key].reviews = reviews
+  }
+  return out
+}
+
+// A copy with one value changed; null takes it away, and a deck left with
+// nothing drops out.
+function withLimit(limits, id, kind, value) {
+  var out = normalizeLimits(limits)
+  if (!out[id]) out[id] = {}
+  if (value === null) delete out[id][kind]
+  else out[id][kind] = value
+  return normalizeLimits(out)
+}
+
+// One press of + or -. Stepping below zero takes the cap away, and stepping up
+// from no cap starts at one step.
+function stepLimit(value, direction, step) {
+  if (value === null || value === undefined) return direction > 0 ? step : null
+  var next = direction > 0 ? (Math.floor(value / step) + 1) * step
+                           : (Math.ceil(value / step) - 1) * step
+  if (next >= 0) return next
+  return value > 0 ? 0 : null
+}
+
+// What each limited deck has left today, counted from the library's cards for
+// the same reason the overall tallies are.
+function deckBudgets(library, progress, now, limits) {
+  var caps = normalizeLimits(limits)
+  var ids = Object.keys(caps)
+  if (!ids.length) return []
+
+  var today = dayKey(now)
+  var budgets = ids.map(function(id) {
+    var c = caps[id]
+    return {
+      id: id,
+      fresh: c["new"] === undefined ? Infinity : c["new"],
+      due: c.reviews === undefined ? Infinity : c.reviews
+    }
+  })
+
+  var seen = {}
+  ;(library || []).forEach(function(card) {
+    var s = progress && progress.reviews ? progress.reviews[card.id] : null
+    if (!s) return
+    var introduced = text(s.firstDay) === today
+    var reviewed = !introduced && num(s.updated, 0) > 0 && dayKey(num(s.updated, 0)) === today
+    if (!introduced && !reviewed) return
+
+    budgets.forEach(function(b) {
+      if (!covers(b.id, text(card.deck), DECK_SEP)) return
+      // A card listed in two decks under one parent is one card.
+      var key = b.id + "\n" + card.id
+      if (seen[key]) return
+      seen[key] = true
+      if (introduced) b.fresh = Math.max(0, b.fresh - 1)
+      else b.due = Math.max(0, b.due - 1)
+    })
+  })
+  return budgets
+}
+
+// What today's limits let through. The queue and the counts both come from
+// here, so the number in the bar and the cards behind it cannot disagree.
+//
+// `caps` is { limits, library }, where library is every card there is, picked
+// or not: a card answered under a different selection this morning still spent
+// its deck's allowance.
+//
+// A deck's review cap leaves learning and relearning cards alone. They are
+// today's unfinished business, and a deck capped at no reviews would otherwise
+// start new cards it could never finish.
+function admit(cards, progress, now, newPerDay, reviewsPerDay, caps) {
+  var rolled = progress || emptyProgress()
+  var left = remainingToday(rolled, now, newPerDay, reviewsPerDay)
+  var budgets = caps ? deckBudgets(caps.library, rolled, now, caps.limits) : []
+  var byDeck = {}
+
+  function budgetsFor(deck) {
+    var d = text(deck)
+    if (!Object.prototype.hasOwnProperty.call(byDeck, d))
+      byDeck[d] = budgets.filter(function(b) { return covers(b.id, d, DECK_SEP) })
+    return byDeck[d]
+  }
+  function spend(list, kind) {
+    for (var i = 0; i < list.length; i++) if (list[i][kind] <= 0) return false
+    for (var j = 0; j < list.length; j++) list[j][kind]--
+    return true
+  }
+
+  var due = []
+  var fresh = []
+  for (var i = 0; i < cards.length; i++) {
+    var s = stateFor(rolled, cards[i].id)
+    // A suspended card is out of the rotation entirely - not shown, not
+    // counted, and not waiting. It is the only state that skips both queues.
+    if (s.suspended) continue
+    if (s.phase === "new") {
+      if (fresh.length < left.fresh && spend(budgetsFor(cards[i].deck), "fresh"))
+        fresh.push(cards[i].id)
+    } else if (s.due <= now) {
+      due.push({ id: cards[i].id, due: s.due, deck: cards[i].deck, phase: s.phase })
+    }
+  }
+
+  due.sort(function(a, b) { return a.due - b.due })
+
+  // The cap trims the tail, so what survives is the most overdue — the cards
+  // closest to being forgotten, which is what a partial day should spend
+  // itself on.
+  var shown = []
+  for (var d = 0; d < due.length && shown.length < left.due; d++) {
+    if (due[d].phase !== "review" || spend(budgetsFor(due[d].deck), "due"))
+      shown.push(due[d].id)
+  }
+  return { due: shown, fresh: fresh, dueTotal: due.length }
+}
+
+// Which deck a new card goes to: the one on screen, else the first picked,
+// else the default file.
+function addTarget(current, decks, selected) {
+  if (current) return current
+  var list = decks || []
+  if (selected && selected.length)
+    for (var i = 0; i < list.length; i++)
+      if (deckMatches(list[i].id, selected)) return list[i].id
+  return "cards"
 }
 
 // WRITE_SH takes a directory and a bare filename, so a configured deck path
@@ -770,35 +1235,9 @@ function stateFor(progress, id) {
 // unseen cards as the day's allowance still permits. Reviews come before new
 // cards because a card you are about to forget is worth more than one you have
 // never seen.
-function buildQueue(cards, progress, now, newPerDay, reviewsPerDay) {
-  var rolled = progress || emptyProgress()
-  var left = remainingToday(rolled, now, newPerDay, reviewsPerDay)
-  var remaining = left.fresh
-
-  var due = []
-  var fresh = []
-
-  for (var i = 0; i < cards.length; i++) {
-    var card = cards[i]
-    var s = stateFor(rolled, card.id)
-    // A suspended card is out of the rotation entirely - not shown, not
-    // counted, and not waiting. It is the only state that skips both queues.
-    if (s.suspended) continue
-    if (s.phase === "new") {
-      if (fresh.length < remaining) fresh.push(card.id)
-    } else if (s.due <= now) {
-      due.push({ id: card.id, due: s.due })
-    }
-  }
-
-  due.sort(function(a, b) { return a.due - b.due })
-
-  // The cap trims the tail, so what survives is the most overdue — the cards
-  // closest to being forgotten, which is what a partial day should spend
-  // itself on.
-  var queue = []
-  for (var d = 0; d < due.length && d < left.due; d++) queue.push(due[d].id)
-  return queue.concat(fresh)
+function buildQueue(cards, progress, now, newPerDay, reviewsPerDay, caps) {
+  var allowed = admit(cards, progress, now, newPerDay, reviewsPerDay, caps)
+  return allowed.due.concat(allowed.fresh)
 }
 
 // How many answers back you can walk. Deep enough that a misgrade noticed a
@@ -821,10 +1260,9 @@ function promote(queue, id) {
 
 // Headline numbers for the bar and the panel. `waiting` is a card in learning
 // that is not due yet — the reason a session can be empty and still unfinished.
-function counts(cards, progress, now, newPerDay, reviewsPerDay) {
+function counts(cards, progress, now, newPerDay, reviewsPerDay, caps) {
   var rolled = progress || emptyProgress()
-  var left = remainingToday(rolled, now, newPerDay, reviewsPerDay)
-  var remaining = left.fresh
+  var allowed = admit(cards, rolled, now, newPerDay, reviewsPerDay, caps)
 
   var out = {
     total: cards.length,
@@ -844,12 +1282,8 @@ function counts(cards, progress, now, newPerDay, reviewsPerDay) {
     // card that is never coming.
     if (s.suspended) { out.suspended++; continue }
 
-    if (s.phase === "new") {
-      out.fresh++
-      continue
-    }
+    if (s.phase === "new") continue
     if (s.due <= now) {
-      out.due++
       if (s.phase === "learning" || s.phase === "relearning") out.learning++
       continue
     }
@@ -857,11 +1291,11 @@ function counts(cards, progress, now, newPerDay, reviewsPerDay) {
     if (!out.nextDue || s.due < out.nextDue) out.nextDue = s.due
   }
 
-  out.fresh = Math.min(out.fresh, remaining)
+  out.fresh = allowed.fresh.length
   // Held back by today's cap rather than not due — worth separating, because
   // "nothing left today" and "nothing due" are different things to be told.
-  out.held = Math.max(0, out.due - left.due)
-  out.due = Math.min(out.due, left.due)
+  out.held = allowed.dueTotal - allowed.due.length
+  out.due = allowed.due.length
   out.pending = out.due + out.fresh
   return out
 }
@@ -1016,6 +1450,9 @@ function percent(fraction) {
 // Only directories we create are ours to set, and those are private.
 var WALK_SH = [
   'h="$1"; rel="$2"',
+  // The walk splits on "/" with an unquoted expansion, which would otherwise
+  // also expand a directory named `[a]` or `*` against the working directory.
+  'set -f',
   // A leading slash or any `..` would walk back out of home; the caller is
   // supposed to have ruled both out already, so treat them as a bug, not input.
   'case "$rel" in ""|/*) exit 64;; esac',
@@ -1069,6 +1506,39 @@ var READ_SH = [
   '[ -L "$f" ] && exit 65',
   '[ -f "$f" ] || exit 0',
   'exec dd if="$f" iflag=nofollow,nonblock bs=' + READ_LIMIT + ' count=1 2>/dev/null'
+].join("\n")
+
+// Listing the library. The same walk and the same pin as a read, but of the
+// whole path, because here the last component is the directory.
+//
+// `find` does not follow symlinks and only regular files are named, so a deck
+// cannot be a link to something else; the pin is what keeps the directory
+// itself from being swapped. Dotfiles are skipped, which is also what hides a
+// write in progress, and so is any name with a control character, since the
+// listing is tab and newline separated. Depth and count are bounded for the
+// same reason a read is.
+//
+// $1 = HOME, $2 = directory relative to HOME.
+var LIST_LIMIT = 500
+var LIST_SH = [
+  WALK_SH,
+  'dir="$rel"',
+  'd="$base"',
+  'IFS="/"',
+  'for c in $dir; do',
+  '  [ -n "$c" ] || continue',
+  '  d="$d/$c"',
+  '  [ -L "$d" ] && exit 65',
+  '  [ -e "$d" ] || exit 0',
+  '  [ -d "$d" ] || exit 65',
+  '  [ -O "$d" ] || exit 65',
+  'done',
+  'unset IFS',
+  PIN_SH,
+  'find -P /proc/self/fd/9/ -mindepth 1 -maxdepth 8'
+    + " \\( -name '.*' -o -name '*[[:cntrl:]]*' \\) -prune"
+    + " -o -type f -name '*.json' -printf '%T@\\t%s\\t%P\\n' 2>/dev/null"
+    + ' | head -n ' + LIST_LIMIT
 ].join("\n")
 
 // Writing. The document arrives on stdin, so nothing about it is interpolated
@@ -1160,7 +1630,7 @@ function findEntry(config, id) {
 
   var layout = config.bar && config.bar.layout
   if (layout) {
-    var sections = ["left", "center", "right"]
+    var sections = ["left", "centerBegin", "center", "centerEnd", "right", "tray"]
     for (var s = 0; s < sections.length; s++) {
       var arr = layout[sections[s]]
       if (!Array.isArray(arr)) continue

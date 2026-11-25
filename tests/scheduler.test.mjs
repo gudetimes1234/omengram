@@ -30,6 +30,10 @@ const EXPORTS = [
   "LEECH_THRESHOLD", "isLeechLapse", "leechConfig", "unsuspendAll",
   "daysLate", "constrainIvl", "HARD_MULTIPLIER", "EASY_BONUS",
   "LAPSE_PERCENT", "lapseFactor",
+  "LIST_SH", "deckMatches", "pathMatches", "normalizeDecks", "scopeLabel", "resolveDeckDir",
+  "parseListing", "buildDeckTree", "nodeState", "toggleDeck", "toggleTag", "assignDeck",
+  "mergeDecks", "deckRows", "tagRows", "normalizeLimits", "withLimit", "stepLimit",
+  "deckBudgets", "admit", "addTarget",
 ]
 const G = {}
 new Function("exports", `${src}\nfor (const k of ${JSON.stringify(EXPORTS)}) exports[k] = eval(k)`)(G)
@@ -1231,6 +1235,204 @@ group("how much a lapse costs is a setting")
   t("at 0% the card comes back at a day", after(0) === 1)
   t("at 100% the card comes back where it was", after(100) === 100)
 }
+
+
+// ---------------------------------------------------------------- library
+const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+const deckOf = (id, ...fronts) => ({
+  id, cards: G.assignDeck(G.parseDeck(JSON.stringify(
+    fronts.map((f) => typeof f === "string" ? { front: f, back: "b" } : { back: "b", ...f }))).cards, id)
+})
+
+group("the library listing")
+{
+  const l = G.parseListing([
+    "1.5\t10\tzeta.json", "2\t11\tinfra/backend.json", "3\t12\tinfra.json", "4\t13\tinfra extra.json",
+    "5\t14\tgleamdrill:NeetCode.json", "6\t15\tnotes.txt", "garbage", "7\t16\t/x.json", "",
+  ].join("\n"))
+  t("ids are paths without the extension, children after their parent",
+    eq(l.map((x) => x.id), ["infra", "infra/backend", "infra extra", "zeta"]))
+  t("the stamp covers both time and size", l[0].stamp === "3:12")
+  t("a reserved id is not a library deck", !l.some((x) => x.id.startsWith("gleamdrill:")))
+  t("an empty listing is no decks", eq(G.parseListing(""), []))
+  t("the library defaults and expands ~",
+    G.resolveDeckDir("", "/h") === "/h/.local/share/omanki" &&
+    G.resolveDeckDir("~/d/", "/h") === "/h/d" && G.resolveDeckDir("/x", "/h") === "/x")
+}
+
+group("the library is listed without following anything")
+{
+  const home = makeHome()
+  const LIB = ".local/share/omanki"
+  t("an absent library lists as nothing",
+    (() => { const r = sh(G.LIST_SH, home, LIB); return r.status === 0 && r.stdout === "" })())
+  mkdirSync(join(home, LIB, "infra/[a] *deep"), { recursive: true })
+  mkdirSync(join(home, LIB, ".hidden"))
+  for (const f of ["cards.json", "infra/backend.json", "infra/[a] *deep/x y.json", ".omanki.abc.json",
+                   ".hidden/h.json", "readme.md", "bad\nname.json"])
+    writeFileSync(join(home, LIB, f), "{}")
+  const decoy = makeDecoy()
+  writeFileSync(join(decoy, "secret.json"), "{}")
+  symlinkSync(join(decoy, "secret.json"), join(home, LIB, "link.json"))
+  symlinkSync(decoy, join(home, LIB, "linkdir"))
+
+  const ids = G.parseListing(sh(G.LIST_SH, home, LIB).stdout).map((x) => x.id)
+  t("real decks at any depth are listed, odd names included",
+    eq(ids, ["cards", "infra/[a] *deep/x y", "infra/backend"]))
+  t("a listed deck with glob characters in its path can be read",
+    sh(G.READ_SH, home, LIB + "/infra/[a] *deep/x y.json").stdout === "{}")
+
+  for (const link of [".local", ".local/share", LIB]) {
+    const h = mkdtempSync(join(tmpdir(), "omanki-home-"))
+    mkdirSync(join(h, dirname(link)), { recursive: true })
+    symlinkSync(decoy, join(h, link))
+    t(`a symlink at ${link} is refused`, sh(G.LIST_SH, h, LIB).status === 65)
+  }
+  for (const rel of ["", "/etc", "../x", "a/../../x"])
+    t(`listing ${JSON.stringify(rel)} is refused`, sh(G.LIST_SH, home, rel).status === 64)
+}
+
+group("the deck tree")
+{
+  const decks = [deckOf("infra", "own"), deckOf("infra/a", "1", "2"), deckOf("x/y/z", "3")]
+  const rows = G.deckRows(decks, G.emptyProgress(), NOW)
+  t("implied parents get rows, in order",
+    eq(rows.map((r) => [r.id, r.depth, r.own]),
+       [["infra", 0, true], ["infra/a", 1, true], ["x", 0, false], ["x/y", 1, false], ["x/y/z", 2, true]]))
+  t("a parent counts its children", rows[0].total === 3 && rows[0].fresh === 3 && rows[2].fresh === 1)
+  const p = { reviews: { [decks[1].cards[0].id]: { ...G.newState(), phase: "review", due: NOW - 1 } } }
+  t("due and new are told apart", eq([G.deckRows(decks, p, NOW)[0]].map((r) => [r.due, r.fresh]), [[1, 2]]))
+}
+
+group("picking decks")
+{
+  const rows = G.buildDeckTree([{ id: "infra" }, { id: "infra/a" }, { id: "infra/b" }, { id: "infra/b/c" }, { id: "z" }])
+  const tog = (sel, id) => G.toggleDeck(rows, sel, id)
+  t("nothing picked is everything", G.deckMatches("anything", []))
+  t("a parent includes its children", G.deckMatches("infra/b/c", ["infra"]))
+  t("but not a deck that only shares a prefix", !G.deckMatches("infragood", ["infra"]))
+  t("ticking from nothing picks just that", eq(tog([], "z"), ["z"]))
+  t("unticking the last goes back to everything", eq(tog(["z"], "z"), []))
+  t("ticking a parent replaces its children", eq(tog(["infra/a", "z"], "infra"), ["z", "infra"]))
+
+  const split = tog(["infra"], "infra/a")
+  t("unticking a child keeps the rest of the parent",
+    G.deckMatches("infra", split) && G.deckMatches("infra/b", split) &&
+    G.deckMatches("infra/b/c", split) && !G.deckMatches("infra/a", split))
+  t("the parent then shows as partly picked", G.nodeState("infra", split, "/") === "some")
+  t("ticking the child again folds the parent back", eq(tog(split, "infra/a"), ["infra"]))
+
+  const deep = tog(["infra"], "infra/b/c")
+  t("unticking a grandchild keeps every other level",
+    ["infra", "infra/a", "infra/b"].every((d) => G.deckMatches(d, deep)) && !G.deckMatches("infra/b/c", deep))
+  t("and folds all the way back up", eq(tog(deep, "infra/b/c"), ["infra"]))
+  t("ticking a partly picked parent takes all of it", eq(tog(split, "infra"), ["infra"]))
+  t("a deck that is gone is dropped", eq(tog(["gone", "z"], "infra/a"), ["z", "infra/a"]))
+  t("every row toggled twice from any one selection is where it started", rows.every((r) =>
+    [[], ["infra"], ["z"], ["infra/a"]].every((sel) => {
+      const members = (x) => rows.map((q) => x.length > 0 && G.deckMatches(q.id, x))
+      return G.nodeState(r.id, sel, "/") === "some" || eq(members(tog(tog(sel, r.id), r.id)), members(sel))
+    })))
+  t("selections are cleaned on the way in", eq(G.normalizeDecks([" a ", "a", "", null]), ["a"]))
+}
+
+group("cards in scope")
+{
+  const decks = [deckOf("a", { front: "shared" }, "one"), deckOf("b", { front: "shared" }, "two")]
+  t("a card in two decks is shown once", G.mergeDecks(decks, []).length === 3)
+  t("and is found from either deck", G.mergeDecks(decks, ["b"]).map((c) => c.front).join() === "shared,two")
+  t("cards know their deck", G.mergeDecks(decks, ["b"])[0].deck === "b")
+  t("nothing matching is no cards", eq(G.mergeDecks(decks, ["gone"]), []))
+}
+
+group("tags nest")
+{
+  const cards = deckOf("d",
+    { front: "1", tags: ["sd::caching"] }, { front: "2", tags: ["SD::messaging", "sd::caching"] },
+    { front: "3", tags: ["sdx"] }, { front: "4" }).cards
+  const fronts = (tags) => G.filterByTags(cards, tags).map((c) => c.front).join("")
+  t("a parent tag takes its children", fronts(["sd"]) === "12")
+  t("a child tag takes only itself", fronts(["sd::messaging"]) === "2")
+  t("rows count cards, not tags", eq(G.tagRows(cards).map((r) => [r.id, r.total]),
+    [["sd", 2], ["sd::caching", 2], ["sd::messaging", 1], ["sdx", 1]]))
+  t("tags toggle like decks", eq(G.toggleTag(G.tagRows(cards), ["sd"], "sd::caching"), ["sd::messaging"]))
+}
+
+group("a limit per deck")
+{
+  const decks = [deckOf("p/a", "a1", "a2", "a3"), deckOf("p/b", "b1", "b2", "b3"), deckOf("q", "q1", "q2")]
+  const cards = G.mergeDecks(decks, [])
+  const q = (limits, progress = G.emptyProgress(), newPer = 20, rev = 0, from = cards) =>
+    G.buildQueue(from, progress, NOW, newPer, rev, { limits, library: cards })
+     .map((id) => cards.find((c) => c.id === id).front)
+  const id = (f) => cards.find((c) => c.front === f).id
+
+  t("no limits changes nothing", q({}).length === 8)
+  t("a deck's cap holds only that deck", eq(q({ "p/a": { new: 1 } }), ["a1", "b1", "b2", "b3", "q1", "q2"]))
+  t("a parent's cap covers its children together", eq(q({ p: { new: 4 } }), ["a1", "a2", "a3", "b1", "q1", "q2"]))
+  t("a card has to fit under every cap above it",
+    eq(q({ p: { new: 4 }, "p/a": { new: 1 } }), ["a1", "b1", "b2", "b3", "q1", "q2"]))
+  t("the overall cap still holds", q({ "p/a": { new: 1 } }, undefined, 3).length === 3)
+  t("a deck's zero is none", eq(q({ p: { new: 0 } }), ["q1", "q2"]))
+
+  const seen = { reviews: { [id("a1")]: { ...G.newState(), phase: "review", due: NOW + G.DAY,
+                                          firstDay: G.dayKey(NOW), updated: NOW } } }
+  t("what was introduced today is spent", eq(q({ "p/a": { new: 2 } }, seen).filter((f) => f[0] === "a"), ["a2"]))
+  t("and stays spent when the selection changes since",
+    eq(q({ p: { new: 1 } }, seen, 20, 0, G.mergeDecks(decks, ["p/b"])), []))
+
+  const due = (f, over, phase = "review") => ({ [id(f)]: { ...G.newState(), phase, due: NOW - over, firstDay: "2020-01-01" } })
+  const p2 = { reviews: { ...due("a1", 10), ...due("a2", 30), ...due("a3", 20), ...due("q1", 5) } }
+  const dueOnly = (limits, pr = p2, rev = 0) => q(limits, pr, 0, rev)
+  t("a review cap keeps the most overdue", eq(dueOnly({ "p/a": { reviews: 2 } }), ["a2", "a3", "q1"]))
+  t("a held card leaves its overall place to another", eq(dueOnly({ "p/a": { reviews: 1 } }, p2, 2), ["a2", "q1"]))
+  t("a card still in learning is not held by a deck's review cap",
+    eq(dueOnly({ p: { reviews: 0 } }, { reviews: { ...due("a1", 1, "learning"), ...due("a2", 1) } }), ["a1"]))
+
+  // The badge and the queue come from one place; check they say the same.
+  for (const limits of [{}, { p: { new: 2, reviews: 1 } }, { "p/a": { reviews: 0 }, q: { new: 0 } }]) {
+    const c = G.counts(cards, p2, NOW, 3, 3, { limits, library: cards })
+    t("the count is the queue's length under " + JSON.stringify(limits),
+      c.pending === G.buildQueue(cards, p2, NOW, 3, 3, { limits, library: cards }).length && c.due + c.held === 4)
+  }
+}
+
+group("limits as typed")
+{
+  t("only sane values survive", eq(G.normalizeLimits(
+    { a: { new: "5", reviews: -1 }, b: { new: null }, c: 4, " d ": { reviews: 2.4 }, e: { new: "x" } }),
+    { a: { new: 5 }, d: { reviews: 2 } }))
+  t("a list or nothing is no limits", eq(G.normalizeLimits([1]), {}) && eq(G.normalizeLimits(undefined), {}))
+  t("setting one leaves the other", eq(G.withLimit({ a: { new: 5 } }, "a", "reviews", 9), { a: { new: 5, reviews: 9 } }))
+  t("clearing the last drops the deck", eq(G.withLimit({ a: { new: 5 } }, "a", "new", null), {}))
+  t("stepping up from no cap starts at a step", G.stepLimit(null, 1, 5) === 5)
+  t("stepping lands on multiples", G.stepLimit(7, 1, 5) === 10 && G.stepLimit(7, -1, 5) === 5)
+  t("down goes to zero, then to no cap", G.stepLimit(3, -1, 5) === 0 && G.stepLimit(0, -1, 5) === null &&
+    G.stepLimit(null, -1, 5) === null)
+}
+
+group("saying what is being studied")
+{
+  const st = { phase: "new" }
+  t("nothing picked says nothing", G.scopeLabel([], []) === "")
+  t("one deck is named by its last part", G.scopeLabel(["infra/backend"], []) === "backend")
+  t("an own-only entry is named by its deck", G.scopeLabel(["infra/."], []) === "infra")
+  t("more are counted", G.scopeLabel(["a", "b"], ["x"]) === "2 decks  ·  #x")
+  t("many tags are counted", G.scopeLabel([], ["a", "b", "c", "d"]) === "4 tags")
+  t("the header carries it", G.sectionLabel("reviewing", st, ["sd"], ["infra"]) === "NEW  ·  infra  ·  #sd")
+}
+
+group("where a new card goes")
+{
+  const decks = [deckOf("a", "1"), deckOf("f/b", "2")]
+  t("the deck on screen first", G.addTarget("x", decks, ["a"]) === "x")
+  t("then the first picked, through a parent", G.addTarget("", decks, ["f"]) === "f/b")
+  t("else the default file", G.addTarget("", decks, []) === "cards" && G.addTarget("", [], ["gone"]) === "cards")
+}
+
+group("settings are found wherever the widget sits")
+for (const s of ["left", "centerBegin", "center", "centerEnd", "right", "tray"])
+  t("in " + s, G.findEntry({ bar: { layout: { [s]: [{ id: "p", tags: ["x"] }] } } }, "p").tags?.[0] === "x")
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
