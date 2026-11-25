@@ -136,6 +136,18 @@ Column {
     textFormat: Text.PlainText
     width: parent.width
     horizontalAlignment: Text.AlignHCenter
+    elide: Text.ElideMiddle
+    text: "Adds to " + (root.reviewer ? root.reviewer.addDeck.split("/").join(" › ") : "")
+    color: root.foreground
+    opacity: 0.6
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
+  Text {
+    textFormat: Text.PlainText
+    width: parent.width
+    horizontalAlignment: Text.AlignHCenter
     text: "enter moves on  ·  enter on tags saves  ·  esc back to review"
     color: root.foreground
     opacity: 0.4

@@ -13,7 +13,12 @@
 Spaced-repetition flashcards in the Omarchy bar, scheduled the way Anki
 schedules them.
 
-There are two surfaces onto the same deck:
+This is a fork of [yamz8/omanki](https://github.com/yamz8/omanki). It adds a
+library of decks, and a picker in the bar panel for which decks and tags to
+study and how much of each a day. It keeps the plugin id, so it installs in
+place of the original rather than beside it.
+
+There are two surfaces onto the same cards:
 
 - **The bar panel.** Click the glyph to clear a few cards in passing.
 - **The fullscreen overlay.** `Super + Ctrl + J` for actually sitting down to a
@@ -33,7 +38,7 @@ https://github.com/user-attachments/assets/5f6f7fe7-9a2c-4d74-9281-ffa86d0405d3
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/yamz8/omanki.git --enable
+omarchy plugin add https://github.com/gudetimes1234/omanki.git --enable
 ```
 
 That clones the repo into `~/.config/omarchy/plugins/yamz8.omanki/`, validates
@@ -59,6 +64,40 @@ never writes one unless you add a card through the `a` composer.
 
 The fullscreen overlay is summoned by a keybind, which you add yourself — see
 [Placing it and binding it](#placing-it-and-binding-it) below.
+
+## Choosing what to study
+
+Press `d` in the bar panel, or click the line above the card. Three tabs, each
+change saved as it is made:
+
+- **Decks** — tick any number. A folder includes the decks in it, and unticking
+  one of those leaves the rest of the folder. *All decks* is nothing ticked.
+- **Tags** — the tags on the cards in those decks. Tags nest with `::`, so `sd`
+  includes `sd::caching`. Decks add up; tags then narrow them.
+- **Limits** — new cards and reviews a day, for the whole day and for any deck
+  or folder. A card has to fit under every limit above it. A dash is no limit;
+  a deck's `0` is none today. Reviews held by a *deck's* limit never include
+  cards still being learned.
+
+`↑` `↓` move, `space` ticks (or switches between the two numbers on Limits),
+`+` `-` change a limit, `c` clears it, `←` `→` change tab, `esc` goes back.
+
+The overlay studies the same selection. The header names it (`NEW · infra ·
+#sd`), so a short session is never mistaken for an empty library.
+
+## Bringing decks over from Anki
+
+```bash
+/usr/local/share/anki/python/bin/python3 tools/import_anki.py --dry-run
+/usr/local/share/anki/python/bin/python3 tools/import_anki.py
+```
+
+Copies every Anki deck into the library once, deck tree and tags included. Cards
+are rendered through their own templates and flattened to plain text; pictures
+become `[image]`. **They start as new cards on omanki's schedule and nothing is
+written back to Anki** — only a temporary copy of the collection is opened, and
+Anki has to be closed. Existing files are not replaced without `--force`. Cards
+carry an id made from their note, so importing again keeps their progress.
 
 ## Placing it and binding it
 
@@ -111,6 +150,8 @@ same restart clears it.
 | `space` / `enter` | Reveal the answer, then grade it Good |
 | `1` `2` `3` `4` | Again / Hard / Good / Easy |
 | `u` | Undo the last answer |
+| `d` | Choose what to study (bar panel only) |
+| `↑` `↓` | Scroll a long card |
 | `s` | Statistics |
 | `←` `→` | Move between statistics tabs |
 | `h` `l` | Move between statistics tabs (bar panel only) |
@@ -212,9 +253,16 @@ schedule and never be seen. What it does not preserve is your *formatting*: the
 file is reserialized at two-space indent, so hand-tuned whitespace does not
 survive an in-app add.
 
-## Your deck
+## Your decks
 
-Cards live in `~/.local/share/omanki/cards.json`, which is yours to edit:
+Decks are the `.json` files under `~/.local/share/omanki`, yours to edit. A
+folder is a parent: `infra/backend.json` is the deck `infra › backend`, and
+`infra.json` beside the folder holds the parent's own cards. Files are found up
+to eight levels down; links, dotfiles and anything over 256 KiB are not read. A
+file that does not parse is named in the panel and the rest still load. Names
+beginning `gleamdrill:` are reserved.
+
+Each file is a list of cards:
 
 ```json
 {
@@ -256,17 +304,20 @@ hot-reloads on save.
 
 | Setting | Default | Does |
 |---------|---------|------|
-| `deck` | `~/.local/share/omanki/cards.json` | Path to the deck file. `~` is expanded. |
-| `newPerDay` | `20` | How many unseen cards to introduce per study day. `0` reviews only. |
+| `deckDir` | `~/.local/share/omanki` | The library. `~` is expanded. |
+| `deck` | *(none)* | Study this one file instead of the library. |
+| `decks` | *(all)* | Decks to study, by id. Set from the picker. |
+| `limits` | *(none)* | Per-deck limits, `{ "id": { "new": 10, "reviews": 50 } }`. Set from the picker. |
+| `newPerDay` | `20` | How many unseen cards to introduce per study day, across every deck. `0` reviews only. |
 | `showCount` | `true` | Show the waiting count next to the bar glyph. |
-| `tags` | *(none)* | Restrict the session to cards carrying any of these tags. |
+| `tags` | *(none)* | Restrict the session to cards carrying any of these tags. Set from the picker. |
 | `reviewsPerDay` | `0` | Cap how many due cards a day serves. `0` means no cap. |
 | `lapsePercent` | `50` | How much of a forgotten card's interval survives, as a percentage. `0` is Anki's default. |
 | `leechThreshold` | `8` | Lapses before a card counts as a leech. `0` turns leeches off. |
 | `leechSuspend` | `true` | Take a leech out of the rotation rather than only marking it. |
 
 ```json
-{ "id": "yamz8.omanki", "newPerDay": 10, "deck": "~/notes/spanish.json", "tags": ["verbs"] }
+{ "id": "yamz8.omanki", "newPerDay": 10, "decks": ["spanish"], "tags": ["verbs"] }
 ```
 
 `reviewsPerDay` caps only *reviews* — cards that existed before today. Cards
@@ -280,12 +331,11 @@ either. An untagged card is excluded whenever a filter is set. Both surfaces
 share the filter and show it in the header (`NEW · #verbs`), so a short session
 is never mistaken for an empty deck.
 
-Everything except `tags` is declared in `manifest.json` under `barWidget`, with
-types and ranges, so the shell knows the defaults without being told. `tags` is
-left out on purpose: a declared string field would be written as one value, and
-a filter is a *list* — `"verbs, food"` would be read as a single tag by that
-name and match nothing. It stays a hand-edited array until it can be offered
-as one honestly.
+Everything except `decks`, `tags` and `limits` is declared in `manifest.json`
+under `barWidget`, with types and ranges, so the shell knows the defaults
+without being told. Those three are left out on purpose: the schema has no list,
+and `"verbs, food"` written as one string would be read as a single tag by that
+name and match nothing. The picker writes them as what they are.
 
 Note that settings are read when the shell builds the widget: adding a key to
 an existing entry did not take effect here until `omarchy restart shell`, even
@@ -428,7 +478,8 @@ Worth knowing before you point this at your notes.
 **`~/.local/state/omarchy/omanki.json`** — scheduling progress, written on
 every answer. Entirely the plugin's own file.
 
-**`~/.local/share/omanki/cards.json`** — your deck. Only ever appended to, and
+**The decks in `~/.local/share/omanki`**. A card added with `a` goes to the deck
+of the card on screen, and the composer says which. Only ever appended to, and
 only when you add a card through the `a` composer. If you never use it, the
 plugin never writes your deck at all. When it does:
 
@@ -551,6 +602,8 @@ write, so a fixed sleep tests the machine's mood rather than the plugin.
 | `StatsView.qml` | The statistics behind `s` in the overlay, on one page. |
 | `PanelStats.qml` | The same numbers in tabs, for the width the bar panel has. |
 | `StatsTabs.qml` | The tab strip, which rides on the panel's section header. |
+| `StudyPicker.qml` | Decks, tags and limits, behind `d` in the bar panel. |
+| `tools/import_anki.py` | Copies an Anki collection into the library, once. |
 | `Panel.qml` | The bar widget and the panel chrome around the session. |
 | `Omanki.qml` | The fullscreen overlay chrome around the same session. |
 

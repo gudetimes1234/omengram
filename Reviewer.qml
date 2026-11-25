@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Ui
 import "Anki.js" as Anki
 
 // The study session: owns the deck, the scheduling progress, and the queue,
@@ -10,17 +11,20 @@ import "Anki.js" as Anki
 Item {
   id: root
 
-  // Absolute path to the deck the user authors, and the directory the
-  // scheduling progress is written to.
+  // The directory of decks the user authors, or a single deck file instead of
+  // it, and the directory the scheduling progress is written to.
+  property string deckDir: ""
   property string deckPath: ""
   property string stateDir: ""
+  readonly property bool singleFile: root.deckPath !== ""
 
   readonly property string home: Quickshell.env("HOME")
 
-  // Both files must sit inside the home directory: the helpers walk the chain
+  // Everything must sit inside the home directory: the helpers walk the chain
   // component by component and refuse symlinks, and a path outside home cannot
   // be walked that way. Empty means refused, and no process is started for it.
   readonly property string deckRel: Anki.relativeToHome(root.deckPath, root.home)
+  readonly property string dirRel: Anki.relativeToHome(root.deckDir, root.home)
   readonly property string progressRel:
       Anki.relativeToHome(root.stateDir + "/omanki.json", root.home)
   property int newPerDay: 20
@@ -46,9 +50,15 @@ Item {
     leechSuspend: root.leechSuspend
   })
 
-  // Restrict the session to cards carrying any of these tags. Empty means the
-  // whole deck.
+  // Restrict the session to these decks, and to cards carrying any of these
+  // tags. Empty means all of them. A single file is not a library, so there is
+  // nothing in it to pick and the selection is left alone rather than obeyed.
+  property var decks: []
   property var tags: []
+  readonly property var scopeDecks: root.singleFile ? [] : root.decks
+
+  // Daily caps on single decks, on top of the two above.
+  property var limits: ({})
 
   // False whenever the panel is closed, so a session neither ticks nor holds
   // a card revealed while nobody is looking at it.
@@ -64,12 +74,41 @@ Item {
   // and sizes to its text; the fullscreen overlay is a study surface and wants a
   // fixed, larger face that does not jump as answers change length.
   property int minFaceHeight: 0
+  // A card taller than this scrolls rather than pushing the grades off the
+  // surface. 0 is no limit.
+  property int maxFaceHeight: 0
   property real questionFontSize: Style.font.heading
   property real answerFontSize: Style.font.subtitle
 
   // ----------------------------------------------------------------- state
-  property var deck: []
-  readonly property var cards: Anki.filterByTags(root.deck, root.tags)
+  //
+  // One entry per deck file: { id, rel, stamp, cards, error }.
+  property var library: []
+
+  // Every card there is, picked or not. Not deduplicated: limits are per deck,
+  // and a card listed in two of them belongs to both.
+  readonly property var allCards: {
+    var out = []
+    for (var i = 0; i < root.library.length; i++) out = out.concat(root.library[i].cards)
+    return out
+  }
+  readonly property var pickedCards: Anki.mergeDecks(root.library, root.scopeDecks)
+  readonly property var cards: Anki.filterByTags(root.pickedCards, root.tags)
+  readonly property var caps: ({ limits: root.limits, library: root.allCards })
+
+  // Nothing to show because of what was picked, rather than because there is
+  // nothing.
+  readonly property bool scopeEmpty: root.loaded && !root.cards.length && root.allCards.length > 0
+
+  // Decks that could not be read. The rest of the library still loads.
+  readonly property string libraryNotice: {
+    if (root.singleFile) return ""
+    var bad = root.library.filter(function(d) { return d.error })
+    if (!bad.length) return ""
+    return bad[0].id + ": " + bad[0].error
+        + (bad.length > 1 ? " (and " + (bad.length - 1) + " more)" : "")
+  }
+
   property var progress: Anki.emptyProgress()
   property var queue: []
   property string deckError: ""
@@ -93,7 +132,7 @@ Item {
 
   // Re-derived on every tick as well as on every answer, so a card that comes
   // due mid-session appears without the user doing anything.
-  property var stats: Anki.counts(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay)
+  property var stats: Anki.counts(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay, root.caps)
 
   property int now: Math.floor(Date.now() / 1000)
 
@@ -127,6 +166,7 @@ Item {
 
   signal graded(string grade)
   signal cardAdded()
+  signal resetRequested()
 
   // Empty unless the last attempt to add a card failed, in which case it says
   // why and the composer keeps what was typed.
@@ -158,8 +198,20 @@ Item {
     }
   }
 
-  onDeckPathChanged: if (root.loaded) root.reload()
-  onTagsChanged: if (root.loaded) root.rebuild()
+  // Later, as with the scope below: which of the two is in use, and their paths
+  // under home, are bindings on the same properties.
+  onDeckPathChanged: if (root.loaded) Qt.callLater(root.reload)
+  onDeckDirChanged: if (root.loaded) Qt.callLater(root.reload)
+
+  // Compared as text. Every write to shell.json hands the surface new arrays
+  // with the same things in them, and rebuilding for those would turn a
+  // revealed card face down because something else in the bar was configured.
+  //
+  // Later, because this fires while the bindings that depend on the same
+  // properties are still being brought up to date.
+  readonly property string scopeKey: JSON.stringify(
+    [root.scopeDecks, root.tags, root.limits, root.newPerDay, root.reviewsPerDay])
+  onScopeKeyChanged: if (root.loaded) Qt.callLater(root.rebuild)
 
   function cardById(id) {
     if (!id) return null
@@ -168,15 +220,32 @@ Item {
     return null
   }
 
+  readonly property bool faceScrolls: face.implicitHeight > faceView.height + 1
+
+  // A line or so of a long card, for a surface's arrow keys.
+  function scrollFace(direction) {
+    if (!root.faceScrolls) return
+    faceView.contentY = Math.max(0, Math.min(faceView.contentHeight - faceView.height,
+        faceView.contentY + direction * root.answerFontSize * 3))
+  }
+
+  // Every card starts at its top, and a reveal on a long one goes to where the
+  // answer begins rather than leaving it below the fold.
+  onCurrentIdChanged: faceView.contentY = 0
+  onRevealedChanged: Qt.callLater(function() {
+    faceView.contentY = root.revealed && root.faceScrolls
+        ? Math.max(0, Math.min(rule.y, faceView.contentHeight - faceView.height)) : 0
+  })
+
   // ------------------------------------------------------------- the session
   function refresh() {
     root.now = Math.floor(Date.now() / 1000)
-    root.stats = Anki.counts(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay)
+    root.stats = Anki.counts(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay, root.caps)
   }
 
   function rebuild() {
     root.refresh()
-    var queue = Anki.buildQueue(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay)
+    var queue = Anki.buildQueue(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay, root.caps)
 
     // Only pin a card the session can actually show: a filter change could
     // have removed it, and a queue holding an id with no card behind it would
@@ -307,7 +376,7 @@ Item {
   // A path the helpers will refuse is caught here, before any process runs, so
   // the surface can say what is wrong instead of showing an empty deck.
   function checkPaths() {
-    if (!root.deckRel) {
+    if (root.singleFile ? !root.deckRel : !root.dirRel) {
       root.deckError = "Deck must be inside your home directory"
       return false
     }
@@ -315,29 +384,43 @@ Item {
     return true
   }
 
+  // Asked for while one is under way, a reload happens after it: a card just
+  // written may be in a file that has already been read past.
+  property bool reloadQueued: false
+  readonly property bool reading: lister.running || deckReader.running || progressReader.running
+  onReadingChanged: if (!root.reading && root.reloadQueued) Qt.callLater(root.flushReload)
+
+  function flushReload() {
+    if (root.reading || !root.reloadQueued) return
+    root.reload()
+  }
+
   function reload() {
-    // Cleared first so a rebuild waits for both files again. A reader already
-    // in flight still sets its own flag when it finishes, so nothing is lost
-    // by not restarting it.
+    if (root.reading) { root.reloadQueued = true; return }
+    root.reloadQueued = false
     root.deckRead = false
     root.progressRead = false
     if (!root.checkPaths()) {
-      root.deck = []
+      root.library = []
       root.deckRead = true
       root.progressRead = true
       root.loaded = true
       root.rebuild()
       return
     }
-    if (!deckReader.running) deckReader.running = true
-    if (!progressReader.running) progressReader.running = true
+    progressReader.running = true
+    if (root.singleFile)
+      // No stamp, so it is always read.
+      root.readDecks([{ id: Anki.baseOf(root.deckPath).replace(/\.json$/, ""), rel: root.deckRel, stamp: "" }])
+    else
+      lister.running = true
   }
 
   property bool deckRead: false
   property bool progressRead: false
 
-  // The queue needs both files, and the two reads finish in whichever order
-  // they finish, so building it waits for the pair.
+  // The queue needs the decks and the progress, and the two finish in
+  // whichever order they finish, so building it waits for the pair.
   function readFinished() {
     if (!root.deckRead || !root.progressRead) return
     root.loaded = true
@@ -345,24 +428,74 @@ Item {
   }
 
   Process {
+    id: lister
+    command: ["sh", "-c", Anki.LIST_SH, "omanki-list", root.home, root.dirRel]
+    stdout: StdioCollector { id: listing; waitForEnd: true }
+    onExited: {
+      var base = root.dirRel
+      root.readDecks(Anki.parseListing(listing.text).map(function(f) {
+        return { id: f.id, rel: base + "/" + f.path, stamp: f.stamp }
+      }))
+    }
+  }
+
+  // Files not changed since they were parsed are carried over, so the slow
+  // tick that keeps the bar's count honest costs one listing and no parsing.
+  property var incoming: []
+  property int incomingAt: -1
+
+  function readDecks(files) {
+    var have = {}
+    root.library.forEach(function(d) { have[d.rel] = d })
+    root.incoming = files.map(function(f) {
+      var old = have[f.rel]
+      return old && f.stamp && old.stamp === f.stamp ? old : f
+    })
+    root.incomingAt = -1
+    root.readNextDeck()
+  }
+
+  // One file at a time: a library is a handful of small files, and a process
+  // each at once would be a burst every time the shell starts.
+  function readNextDeck() {
+    for (var i = root.incomingAt + 1; i < root.incoming.length; i++) {
+      if (root.incoming[i].cards) continue
+      root.incomingAt = i
+      deckReader.rel = root.incoming[i].rel
+      deckReader.running = true
+      return
+    }
+
+    // Only a library that differs is adopted, so an idle tick does not send
+    // every binding downstream of it round again.
+    var next = root.incoming
+    var same = next.length === root.library.length
+        && next.every(function(d, n) { return d === root.library[n] })
+    if (!same) root.library = next
+    if (root.singleFile) root.deckError = next[0].error
+    root.incoming = []
+    root.deckRead = true
+    root.readFinished()
+  }
+
+  Process {
     id: deckReader
-    command: ["sh", "-c", Anki.READ_SH, "omanki-deck", root.home, root.deckRel]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        // An absent deck is the first-run state, not an error; a deck that
-        // exists but does not parse is one the user needs told about.
-        if (!text.trim()) {
-          root.deck = []
-          if (!root.deckError) root.deckError = ""
-        } else {
-          var parsed = Anki.parseDeck(text)
-          root.deck = parsed.cards
-          root.deckError = parsed.error
-        }
-        root.deckRead = true
-        root.readFinished()
+    property string rel: ""
+    command: ["sh", "-c", Anki.READ_SH, "omanki-deck", root.home, deckReader.rel]
+    stdout: StdioCollector { id: deckText; waitForEnd: true }
+    onExited: {
+      var f = root.incoming[root.incomingAt]
+      if (!f) return
+      // An absent deck is the first-run state, not an error; a deck that
+      // exists but does not parse is one the user needs told about.
+      var parsed = deckText.text.trim() ? Anki.parseDeck(deckText.text) : { cards: [], error: "" }
+      root.incoming[root.incomingAt] = {
+        id: f.id, rel: f.rel, stamp: f.stamp,
+        cards: Anki.assignDeck(parsed.cards, f.id), error: parsed.error
       }
+      // Later, so this process has finished stopping before it is started on
+      // the next file.
+      Qt.callLater(root.readNextDeck)
     }
   }
 
@@ -460,6 +593,14 @@ Item {
   // and any field this plugin knows nothing about are not.
   property var pendingCard: null
 
+  // Which deck a new card goes to. Worked out as it changes so the composer
+  // can say, and pinned when the card is saved so a session moving on to
+  // another deck's card mid-write cannot redirect it.
+  readonly property string addDeck: root.singleFile
+      ? Anki.baseOf(root.deckPath).replace(/\.json$/, "")
+      : Anki.addTarget(root.current ? root.current.deck : "", root.library, root.scopeDecks)
+  property string addRel: ""
+
   // Every refusal goes through here. A refused add is shown in the composer and
   // then forgotten, which leaves nothing behind for a test to look at: from
   // outside, a card correctly refused and an add that quietly did nothing are
@@ -485,12 +626,13 @@ Item {
     root.addError = ""
     root.adding = true
     root.pendingCard = { front: front, back: back, tags: tags }
+    root.addRel = root.singleFile ? root.deckRel : root.dirRel + "/" + root.addDeck + ".json"
     deckEditReader.running = true
   }
 
   Process {
     id: deckEditReader
-    command: ["sh", "-c", Anki.READ_SH, "omanki-deck-edit", root.home, root.deckRel]
+    command: ["sh", "-c", Anki.READ_SH, "omanki-deck-edit", root.home, root.addRel]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -514,7 +656,7 @@ Item {
   Process {
     id: deckWriter
     property string document: ""
-    command: ["sh", "-c", Anki.WRITE_SH, "omanki-deck-write", root.home, root.deckRel]
+    command: ["sh", "-c", Anki.WRITE_SH, "omanki-deck-write", root.home, root.addRel]
     stdinEnabled: true
     onStarted: {
       write(document)
@@ -572,61 +714,89 @@ Item {
     Rectangle {
       width: parent.width
       visible: root.phase === "reviewing"
-      implicitHeight: Math.max(root.minFaceHeight, face.implicitHeight + Style.spacing.lg * 2)
+      readonly property real wanted: Math.max(root.minFaceHeight, face.implicitHeight + Style.spacing.lg * 2)
+      implicitHeight: root.maxFaceHeight > 0
+          ? Math.min(wanted, Math.max(root.minFaceHeight, root.maxFaceHeight)) : wanted
       color: Util.alpha(root.foreground, 0.05)
       radius: Style.cornerRadius
       border.width: Math.max(1, Style.space(1))
       border.color: Util.alpha(root.foreground, 0.12)
 
-      Column {
-        id: face
-        anchors.centerIn: parent
-        width: parent.width - Style.spacing.lg * 2
-        spacing: Style.spacing.md
+      Flickable {
+        id: faceView
+        anchors.fill: parent
+        anchors.margins: Style.spacing.lg
+        contentHeight: face.implicitHeight
+        interactive: root.faceScrolls
+        boundsBehavior: Flickable.StopAtBounds
+        clip: root.faceScrolls
 
-        Text {
-          textFormat: Text.PlainText
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          wrapMode: Text.Wrap
-          text: root.current ? root.current.front : ""
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: root.questionFontSize
-        }
+        Column {
+          id: face
+          width: faceView.width
+          // Centred while it fits, which a Flickable's content has to do for
+          // itself.
+          y: Math.max(0, (faceView.height - face.implicitHeight) / 2)
+          spacing: Style.spacing.md
 
-        // The separator only appears with the answer, so the face of an
-        // unrevealed card is the question and nothing else.
-        Rectangle {
-          width: parent.width
-          height: Math.max(1, Style.space(1))
-          visible: root.revealed
-          color: Util.alpha(root.foreground, 0.15)
-        }
+          Text {
+            textFormat: Text.PlainText
+            width: parent.width
+            // Lines that were laid out - a list, some code - are read from a
+            // straight left edge. A sentence is not.
+            horizontalAlignment: text.indexOf("\n") === -1 ? Text.AlignHCenter : Text.AlignLeft
+            wrapMode: Text.Wrap
+            text: root.current ? root.current.front : ""
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: root.questionFontSize
+          }
 
-        Text {
-          textFormat: Text.PlainText
-          width: parent.width
-          visible: root.revealed
-          horizontalAlignment: Text.AlignHCenter
-          wrapMode: Text.Wrap
-          text: root.current ? root.current.back : ""
-          color: root.accent
-          font.family: root.fontFamily
-          font.pixelSize: root.answerFontSize
-        }
+          // The separator only appears with the answer, so the face of an
+          // unrevealed card is the question and nothing else.
+          Rectangle {
+            id: rule
+            width: parent.width
+            height: Math.max(1, Style.space(1))
+            visible: root.revealed
+            color: Util.alpha(root.foreground, 0.15)
+          }
 
-        Text {
-          textFormat: Text.PlainText
-          width: parent.width
-          visible: !root.revealed
-          horizontalAlignment: Text.AlignHCenter
-          text: "space to reveal"
-          color: root.foreground
-          opacity: 0.35
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
+          Text {
+            textFormat: Text.PlainText
+            width: parent.width
+            visible: root.revealed
+            horizontalAlignment: text.indexOf("\n") === -1 ? Text.AlignHCenter : Text.AlignLeft
+            wrapMode: Text.Wrap
+            text: root.current ? root.current.back : ""
+            color: root.accent
+            font.family: root.fontFamily
+            font.pixelSize: root.answerFontSize
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            width: parent.width
+            visible: !root.revealed
+            horizontalAlignment: Text.AlignHCenter
+            text: "space to reveal"
+            color: root.foreground
+            opacity: 0.35
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
         }
+      }
+
+      Rectangle {
+        visible: root.faceScrolls
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(3)
+        y: faceView.y + faceView.visibleArea.yPosition * faceView.height
+        width: Style.space(2)
+        height: faceView.visibleArea.heightRatio * faceView.height
+        radius: width / 2
+        color: Util.alpha(root.foreground, 0.3)
       }
     }
 
@@ -645,7 +815,7 @@ Item {
       font.pixelSize: Style.font.body
       text: {
         if (root.phase === "loading") return "Loading deck…"
-        if (root.phase === "error") return root.deckError + "\n" + root.deckPath
+        if (root.phase === "error") return root.deckError + "\n" + (root.singleFile ? root.deckPath : root.deckDir)
 
         // An empty session means one of two different things, and sending
         // someone to edit a deck that is actually full would be a wild goose
@@ -655,10 +825,10 @@ Item {
         // this is the screen a fresh install lands on. Naming the file here
         // saves going back to the README to learn it exists.
         if (root.phase === "empty") {
-          return root.deck.length
-              ? "No cards match #" + Anki.normalizeTags(root.tags).join(" #") + ".\n"
-                + root.deck.length + " card" + (root.deck.length === 1 ? "" : "s") + " in the deck."
-              : "No cards yet.\nAdd some to " + root.deckPath
+          return root.scopeEmpty
+              ? "No cards match " + (Anki.scopeLabel(root.scopeDecks, root.tags) || "this") + ".\n"
+                + root.allCards.length + " card" + (root.allCards.length === 1 ? "" : "s") + " in the library."
+              : "No cards yet.\nAdd some to " + (root.singleFile ? root.deckPath : root.deckDir + "/cards.json")
                 + "\nor copy cards.example.json from the plugin folder."
         }
 
@@ -669,8 +839,38 @@ Item {
         var done = root.answered > 0
             ? "Done for now — " + root.answered + " reviewed."
             : "Nothing due."
+        // Cards are there and today's limits are what is holding them, which
+        // is a different thing to be told than that nothing is due.
+        if (root.stats.held > 0)
+          done += "\n" + root.stats.held + " more held back by today's limits."
         return root.stats.nextDue ? done + "\nNext card in " + root.untilNext + "." : done
       }
+    }
+
+    // The way out of a selection that matches nothing, where the reader finds
+    // out about it.
+    Button {
+      anchors.horizontalCenter: parent.horizontalCenter
+      visible: root.scopeEmpty
+      text: "Study everything"
+      bordered: true
+      foreground: root.foreground
+      accent: root.accent
+      fontFamily: root.fontFamily
+      fontSize: Style.font.body
+      onClicked: root.resetRequested()
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      visible: root.libraryNotice !== ""
+      horizontalAlignment: Text.AlignHCenter
+      wrapMode: Text.Wrap
+      text: root.libraryNotice
+      color: root.urgent
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
     }
   }
 }

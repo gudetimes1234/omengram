@@ -47,7 +47,12 @@ Item {
   readonly property var pluginSettings: Anki.findEntry(
     root.shell ? { bar: root.shell.barConfig } : null, root.pluginId)
 
-  readonly property string deckPath: Anki.resolveDeck(root.pluginSettings.deck, Quickshell.env("HOME"))
+  // `deck` names one file and is studied on its own; without it the library is.
+  readonly property string deckPath: root.pluginSettings.deck
+      ? Anki.resolveDeck(root.pluginSettings.deck, Quickshell.env("HOME")) : ""
+  readonly property string deckDir: Anki.resolveDeckDir(root.pluginSettings.deckDir, Quickshell.env("HOME"))
+  readonly property var decks: Anki.normalizeDecks(root.pluginSettings.decks)
+  readonly property var limits: Anki.normalizeLimits(root.pluginSettings.limits)
   readonly property int newPerDay: Anki.sanePerDay(root.pluginSettings.newPerDay)
   readonly property var tags: Anki.normalizeTags(root.pluginSettings.tags)
   readonly property int reviewsPerDay: Anki.sanePerDay(root.pluginSettings.reviewsPerDay, 0)
@@ -56,6 +61,13 @@ Item {
   readonly property bool leechSuspend: root.pluginSettings.leechSuspend !== false
   readonly property int lapsePercent:
       Anki.sanePerDay(root.pluginSettings.lapsePercent, Anki.LAPSE_PERCENT)
+
+  function studyEverything() {
+    if (!root.shell || typeof root.shell.updateEntryInline !== "function") return
+    var entry = {}
+    for (var k in root.pluginSettings) if (k !== "decks" && k !== "tags") entry[k] = root.pluginSettings[k]
+    root.shell.updateEntryInline(root.pluginId, entry)
+  }
 
   // review | stats | add. The overlay is the surface with room for more than
   // one card, so it is the one that gets the other two.
@@ -205,6 +217,13 @@ Item {
                 event.accepted = true
               }
               return
+            case Qt.Key_Up:
+            case Qt.Key_Down:
+              if (root.mode === "review") {
+                reviewer.scrollFace(event.key === Qt.Key_Down ? 1 : -1)
+                event.accepted = true
+              }
+              return
             case Qt.Key_Space:
             case Qt.Key_Return:
             case Qt.Key_Enter:
@@ -256,7 +275,7 @@ Item {
             meta: {
               if (reviewer.phase === "loading") return "Loading"
               if (reviewer.phase === "error") return "Deck error"
-              if (reviewer.phase === "empty") return "Empty deck"
+              if (reviewer.phase === "empty") return reviewer.scopeEmpty ? "Nothing matches" : "Empty deck"
               var s = reviewer.stats
               if (!s.pending) return s.total + " card" + (s.total === 1 ? "" : "s") + "  ·  all caught up"
               return s.due + " due  ·  " + s.fresh + " new"
@@ -322,7 +341,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               text: root.mode === "stats" ? "STATISTICS"
                   : root.mode === "add" ? "ADD A CARD"
-                  : Anki.sectionLabel(reviewer.phase, reviewer.currentState, root.tags)
+                  : Anki.sectionLabel(reviewer.phase, reviewer.currentState, root.tags, reviewer.scopeDecks)
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -346,6 +365,11 @@ Item {
             width: parent.width
             visible: root.mode === "review"
             deckPath: root.deckPath
+            deckDir: root.deckDir
+            decks: root.decks
+            limits: root.limits
+            maxFaceHeight: Math.round(panel.height * 0.55)
+            onResetRequested: root.studyEverything()
             stateDir: Quickshell.env("HOME") + "/.local/state/omarchy"
             newPerDay: root.newPerDay
             reviewsPerDay: root.reviewsPerDay

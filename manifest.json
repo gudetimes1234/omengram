@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "yamz8.omanki",
   "name": "omanki",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "author": "yamz8",
   "license": "MIT",
   "description": "Spaced-repetition flashcards in the bar",
@@ -22,6 +22,7 @@
     "defaultSection": "right",
     "allowMultiple": false,
     "defaults": {
+      "deckDir": "",
       "deck": "",
       "newPerDay": 20,
       "reviewsPerDay": 0,
@@ -32,11 +33,18 @@
     },
     "schema": [
       {
+        "key": "deckDir",
+        "type": "path",
+        "label": "Deck library",
+        "defaultValue": "",
+        "description": "Directory of deck files. Leave empty for ~/.local/share/omanki."
+      },
+      {
         "key": "deck",
         "type": "path",
         "label": "Deck file",
         "defaultValue": "",
-        "description": "Path to the deck. Leave empty for ~/.local/share/omanki/cards.json."
+        "description": "Study this one file instead of the library. Leave empty for the library."
       },
       {
         "key": "newPerDay",

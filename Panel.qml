@@ -15,7 +15,12 @@ Panel {
 
   // Bar widgets are handed their inline shell.json entry, so `setting()` from
   // the Panel base is all the config plumbing this surface needs.
-  readonly property string deckPath: Anki.resolveDeck(root.setting("deck", ""), Quickshell.env("HOME"))
+  // `deck` names one file and is studied on its own; without it the library is.
+  readonly property string deckPath: root.setting("deck", "")
+      ? Anki.resolveDeck(root.setting("deck", ""), Quickshell.env("HOME")) : ""
+  readonly property string deckDir: Anki.resolveDeckDir(root.setting("deckDir", ""), Quickshell.env("HOME"))
+  readonly property var decks: Anki.normalizeDecks(root.setting("decks", []))
+  readonly property var limits: Anki.normalizeLimits(root.setting("limits", {}))
   readonly property int newPerDay: Anki.sanePerDay(root.setting("newPerDay", 20))
   readonly property var tags: Anki.normalizeTags(root.setting("tags", []))
   readonly property int reviewsPerDay: Anki.sanePerDay(root.setting("reviewsPerDay", 0), 0)
@@ -35,10 +40,30 @@ Panel {
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  // review | stats. The overlay has room for a third (the composer); the panel
+  // review | stats | pick. The overlay has room for the composer; the panel
   // does not, and a form typed into a popup that closes on focus loss is not a
-  // trade worth making.
+  // trade worth making. The picker is ticks and steps, each saved as it is
+  // made, so it has nothing to lose that way.
   property string mode: "review"
+
+  // Written straight back to this widget's own shell.json entry, the way the
+  // clock's panel does it. Applied here first so the press shows at once; the
+  // write comes back through the bar as the same value. An empty list or
+  // object is the default, so its key is dropped rather than left as noise.
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var k in root.settings) if (k !== "id") entry[k] = root.settings[k]
+    for (var v in values) {
+      var value = values[v]
+      if (value && typeof value === "object" && JSON.stringify(value).length === 2) delete entry[v]
+      else entry[v] = value
+    }
+    // Through text, so a list that came over a signal is stored as a plain one.
+    entry = JSON.parse(JSON.stringify(entry))
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
 
   // Restoring is offered wherever the leech count is. Until the panel had a
   // statistics view it had neither, and said so by pointing at the overlay.
@@ -63,10 +88,15 @@ Panel {
   // column: one property both of them read, rather than a value bound in two
   // directions between two siblings.
   property int statsTab: 0
+  property int pickTab: 0
 
   // Wraps, so the arrows walk the strip in a circle rather than stopping at the
   // ends and leaving the reader to work out which end they are on.
   function stepTab(delta) {
+    if (root.mode === "pick") {
+      root.pickTab = ((root.pickTab + delta) % picker.count + picker.count) % picker.count
+      return
+    }
     var n = stats.count
     if (n > 0) root.statsTab = ((root.statsTab + delta) % n + n) % n
   }
@@ -82,6 +112,7 @@ Panel {
 
   function showStats() { root.mode = "stats" }
   function showReview() { root.mode = "review" }
+  function togglePick() { root.mode = root.mode === "pick" ? "review" : "pick" }
   function toggleStats() { root.mode = root.mode === "stats" ? "review" : "stats" }
 
   // A surface that closes and reopens is a new sitting, so it starts on the
@@ -127,7 +158,10 @@ Panel {
       // reveal-then-grade rhythm Anki uses.
       // Space and Enter reveal and grade, but only on the cards: in the
       // statistics they would grade a card that is not on screen.
-      onActivateRequested: if (root.mode === "review") reviewer.activate()
+      onActivateRequested: {
+        if (root.mode === "review") reviewer.activate()
+        else if (root.mode === "pick") picker.activate()
+      }
 
       // Escape backs out one level before it closes, the way the overlay's
       // does. Leaving the panel entirely because someone wanted out of the
@@ -146,14 +180,22 @@ Panel {
       // convention and the reason `l` cannot also mean "restore" here. The
       // overlay has no such catcher, so there it still can.
       onMoveRequested: function(dx, dy) {
-        if (root.mode === "stats" && dx !== 0) root.stepTab(dx > 0 ? 1 : -1)
+        if (root.mode === "pick" && dy !== 0) picker.move(dy)
+        else if (root.mode === "review" && dy !== 0) reviewer.scrollFace(dy)
+        else if (root.mode !== "review" && dx !== 0) root.stepTab(dx > 0 ? 1 : -1)
       }
 
       onTextKey: function(t) {
         var k = t.toLowerCase()
         // Same key as the overlay, so the two surfaces stay one set of keys.
         if (k === "s") root.toggleStats()
+        else if (k === "d") root.togglePick()
         else if (k === "r") reviewer.reload()
+        else if (root.mode === "pick") {
+          if (k === "+" || k === "=") picker.adjust(1)
+          else if (k === "-") picker.adjust(-1)
+          else if (k === "c") picker.clear()
+        }
         else if (root.mode !== "review") return
         else if (k === "1") reviewer.answer("again")
         else if (k === "2") reviewer.answer("hard")
@@ -173,7 +215,7 @@ Panel {
           meta: {
             if (reviewer.phase === "loading") return "Loading"
             if (reviewer.phase === "error") return "Deck error"
-            if (reviewer.phase === "empty") return "Empty deck"
+            if (reviewer.phase === "empty") return reviewer.scopeEmpty ? "Nothing matches" : "Empty deck"
             var s = reviewer.stats
             if (!s.pending) return s.total + " card" + (s.total === 1 ? "" : "s") + "  ·  all caught up"
             return s.due + " due  ·  " + s.fresh + " new"
@@ -239,24 +281,54 @@ Panel {
             textFormat: Text.PlainText
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            text: root.mode === "stats"
-                ? "STATISTICS"
-                : Anki.sectionLabel(reviewer.phase, reviewer.currentState, root.tags)
+            anchors.right: root.mode === "review" ? pickHint.left : tabStrip.left
+            anchors.rightMargin: Style.spacing.sm
+            elide: Text.ElideRight
+            text: root.mode === "stats" ? "STATISTICS"
+                : root.mode === "pick" ? "STUDY"
+                : Anki.sectionLabel(reviewer.phase, reviewer.currentState, root.tags, reviewer.scopeDecks)
             foreground: root.foreground
             fontFamily: root.fontFamily
+          }
+
+          // What the header says is being studied is also where to change it.
+          Text {
+            id: pickHint
+            textFormat: Text.PlainText
+            visible: root.mode === "review"
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: "decks ▾"
+            color: pickArea.containsMouse ? Color.accent : root.foreground
+            opacity: pickArea.containsMouse ? 1.0 : 0.5
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+
+          MouseArea {
+            id: pickArea
+            anchors.fill: parent
+            visible: root.mode === "review"
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.togglePick()
           }
 
           StatsTabs {
             id: tabStrip
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            visible: root.mode === "stats"
-            tabs: stats.tabs
-            current: root.statsTab
+            visible: root.mode !== "review"
+            tabs: root.mode === "pick" ? picker.tabs : stats.tabs
+            current: root.mode === "pick" ? root.pickTab : root.statsTab
             foreground: root.foreground
             accent: Color.accent
             fontFamily: root.fontFamily
-            onSelected: function(i) { root.statsTab = i }
+            onSelected: function(i) {
+              if (root.mode === "pick") root.pickTab = i
+              else root.statsTab = i
+            }
           }
         }
 
@@ -273,11 +345,34 @@ Panel {
           onRestoreRequested: root.restoreLeeches()
         }
 
+        StudyPicker {
+          id: picker
+          width: parent.width
+          visible: root.mode === "pick"
+          active: root.opened && root.mode === "pick"
+          reviewer: reviewer
+          decks: root.decks
+          tags: root.tags
+          limits: root.limits
+          newPerDay: root.newPerDay
+          reviewsPerDay: root.reviewsPerDay
+          tab: root.pickTab
+          foreground: root.foreground
+          accent: Color.accent
+          fontFamily: root.fontFamily
+          onChanged: function(values) { root.persistSettings(values) }
+        }
+
         Reviewer {
           id: reviewer
           width: parent.width
           visible: root.mode === "review"
           deckPath: root.deckPath
+          deckDir: root.deckDir
+          decks: root.decks
+          limits: root.limits
+          maxFaceHeight: Style.space(330)
+          onResetRequested: root.persistSettings({ decks: [], tags: [] })
           stateDir: Quickshell.env("HOME") + "/.local/state/omarchy"
           newPerDay: root.newPerDay
           reviewsPerDay: root.reviewsPerDay
@@ -321,13 +416,18 @@ Panel {
               return (root.restoreNotice ? root.restoreNotice + "  ·  " : "")
                   + "← → tabs  ·  s back to cards"
                   + "  ·  esc close"
+            if (root.mode === "pick")
+              return (root.pickTab === 2
+                  ? "+ − change  ·  space new/reviews  ·  c clear"
+                  : "space pick  ·  ↑ ↓ move")
+                  + "  ·  ← → tabs  ·  esc back"
             // A card taken out mid-session says so here; the statistics are
             // now where it can be put back, rather than the overlay.
             if (reviewer.leechNotice)
               return reviewer.leechNotice + "  ·  s statistics to restore"
             return (reviewer.revealed ? "1-4 grade  ·  space good" : "space reveal")
                 + (reviewer.canUndo ? "  ·  u undo" : "")
-                + "  ·  s stats  ·  esc close"
+                + "  ·  d decks  ·  s stats  ·  esc close"
           }
           color: root.foreground
           opacity: 0.4

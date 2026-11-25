@@ -541,13 +541,23 @@ function parseDeck(raw) {
   return { cards: cards, error: "" }
 }
 
+// A setting that may be one value or several, as a plain array. QML hands a list
+// that has been through a signal or a property back as an object Array.isArray
+// does not recognise, and treating that as one value joins its items into a
+// single name that matches nothing.
+function toList(value) {
+  if (value === undefined || value === null) return []
+  if (Array.isArray(value)) return value
+  if (typeof value === "object" && typeof value.length === "number")
+    return Array.prototype.slice.call(value)
+  return [value]
+}
+
 // A tag is written twice — once in the deck, once in shell.json — and those
 // two are typed months apart, so matching ignores case and duplicates.
 function normalizeTags(wanted) {
   var out = []
-  if (wanted === undefined || wanted === null) return out
-
-  var list = Array.isArray(wanted) ? wanted : [wanted]
+  var list = toList(wanted)
   for (var i = 0; i < list.length; i++) {
     var t = text(list[i]).toLowerCase()
     if (t && out.indexOf(t) === -1) out.push(t)
@@ -635,8 +645,7 @@ function deckMatches(id, selected) {
 
 function normalizeDecks(value) {
   var out = []
-  if (value === undefined || value === null) return out
-  var list = Array.isArray(value) ? value : [value]
+  var list = toList(value)
   for (var i = 0; i < list.length; i++) {
     var id = text(list[i])
     if (id && out.indexOf(id) === -1) out.push(id)
@@ -879,8 +888,14 @@ function deckRows(decks, progress, now) {
 
 // The tags on these cards as a tree, with how many cards each would give. A
 // card tagged `sd::caching` and `sd::messaging` is one card under `sd`.
-function tagRows(cards) {
+//
+// Tags already picked get a row even when none of these cards carries one, or
+// a tag picked under other decks would go on filtering with no way to see it.
+function tagRows(cards, picked) {
   var ids = {}
+  normalizeTags(picked).forEach(function(id) {
+    ids[id.slice(-TAG_SEP.length - 1) === TAG_SEP + "." ? id.slice(0, -TAG_SEP.length - 1) : id] = true
+  })
   var totals = {}
   ;(cards || []).forEach(function(c) {
     var mine = {}

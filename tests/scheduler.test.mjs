@@ -1333,6 +1333,9 @@ group("picking decks")
       const members = (x) => rows.map((q) => x.length > 0 && G.deckMatches(q.id, x))
       return G.nodeState(r.id, sel, "/") === "some" || eq(members(tog(tog(sel, r.id), r.id)), members(sel))
     })))
+  const qmlList = { 0: "a", 1: "b", length: 2 }
+  t("a list QML does not call an array is still a list",
+    eq(G.normalizeDecks(qmlList), ["a", "b"]) && eq(G.normalizeTags(qmlList), ["a", "b"]))
   t("selections are cleaned on the way in", eq(G.normalizeDecks([" a ", "a", "", null]), ["a"]))
 }
 
@@ -1355,6 +1358,8 @@ group("tags nest")
   t("a child tag takes only itself", fronts(["sd::messaging"]) === "2")
   t("rows count cards, not tags", eq(G.tagRows(cards).map((r) => [r.id, r.total]),
     [["sd", 2], ["sd::caching", 2], ["sd::messaging", 1], ["sdx", 1]]))
+  t("a picked tag no card here carries keeps its row", eq(
+    G.tagRows(cards, ["other", "sd::."]).map((r) => [r.id, r.total]).slice(0, 2), [["other", 0], ["sd", 2]]))
   t("tags toggle like decks", eq(G.toggleTag(G.tagRows(cards), ["sd"], "sd::caching"), ["sd::messaging"]))
 }
 
