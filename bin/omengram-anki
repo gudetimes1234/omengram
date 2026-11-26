@@ -1,0 +1,9 @@
+#!/bin/sh
+# Runs omengram's bridge to Anki under Anki's own bundled Python, which carries
+# the `anki` library that matches the installed Anki. See bridge/cli.py.
+here=$(dirname "$(readlink -f "$0")")
+anki_dir=${OMENGRAM_ANKI_DIR:-/usr/local/share/anki}
+py="$anki_dir/python/bin/python3"
+[ -x "$py" ] || py=python3
+export OMENGRAM_ANKI_DIR="$anki_dir"
+exec "$py" -I "$here/../bridge/cli.py" "$@"
