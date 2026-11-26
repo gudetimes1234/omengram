@@ -60,6 +60,21 @@ Item {
   // Daily caps on single decks, on top of the two above.
   property var limits: ({})
 
+  // Anki's collection as a second source, scheduled by Anki itself. Off for a
+  // single deck file, which is a deck rather than a library.
+  property bool ankiEnabled: true
+  property string ankiProfile: ""
+  readonly property alias anki: ankiSource
+
+  AnkiSource {
+    id: ankiSource
+    inUse: root.ankiEnabled && !root.singleFile
+    decks: root.scopeDecks
+    tags: root.tags
+    limits: root.limits
+    profile: root.ankiProfile
+  }
+
   // False whenever the panel is closed, so a session neither ticks nor holds
   // a card revealed while nobody is looking at it.
   property bool active: false
@@ -96,9 +111,14 @@ Item {
   readonly property var cards: Anki.filterByTags(root.pickedCards, root.tags)
   readonly property var caps: ({ limits: root.limits, library: root.allCards })
 
+  // How many Anki cards the selection covers, and how many there are at all.
+  readonly property int ankiTotal: ankiSource.inUse ? (ankiSource.counts.total || 0) : 0
+  readonly property int ankiCollection: ankiSource.inUse ? (ankiSource.counts.collection || 0) : 0
+
   // Nothing to show because of what was picked, rather than because there is
   // nothing.
-  readonly property bool scopeEmpty: root.loaded && !root.cards.length && root.allCards.length > 0
+  readonly property bool scopeEmpty: root.loaded && !root.cards.length && !root.ankiTotal
+      && (root.allCards.length > 0 || root.ankiCollection > 0)
 
   // Decks that could not be read. The rest of the library still loads.
   readonly property string libraryNotice: {
@@ -131,21 +151,40 @@ Item {
   property string pinned: ""
 
   // Re-derived on every tick as well as on every answer, so a card that comes
-  // due mid-session appears without the user doing anything.
-  property var stats: Anki.counts(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay, root.caps)
+  // due mid-session appears without the user doing anything. The library's
+  // side; `stats` adds Anki's.
+  property var jsonStats: Anki.counts(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay, root.caps)
+  readonly property var stats: Anki.mergeCounts(root.jsonStats, ankiSource.inUse ? ankiSource.counts : null)
 
   property int now: Math.floor(Date.now() / 1000)
 
-  readonly property string currentId: root.queue.length ? root.queue[0] : ""
-  readonly property var current: root.cardById(root.currentId)
-  readonly property var currentState: Anki.stateFor(root.progress, root.currentId)
+  // The library's next card, and which of the two sources goes first. Undo
+  // pins the source of the card it put back, so that card is the one shown.
+  readonly property var jsonCurrent: root.cardById(root.queue.length ? root.queue[0] : "")
+  readonly property var jsonState: Anki.stateFor(root.progress, root.jsonCurrent ? root.jsonCurrent.id : "")
+  property string pinSource: ""
+  readonly property string source: {
+    var a = ankiSource.inUse ? ankiSource.card : null
+    if (root.pinSource === "anki" && a) return "anki"
+    if (root.pinSource === "json" && root.jsonCurrent) return "json"
+    return Anki.pickSource(a, root.jsonCurrent, root.jsonState)
+  }
+
+  readonly property var current: root.source === "anki" ? ankiSource.card
+      : root.source === "json" ? root.jsonCurrent : null
+  readonly property string currentId: root.current ? root.current.id : ""
+  readonly property var currentState: root.source === "anki"
+      ? Anki.ankiState(ankiSource.card) : root.jsonState
+
+  // When the card on screen was first shown, for Anki's time statistics.
+  property double shownAt: Date.now()
 
   // loading | error | empty | reviewing | waiting | done
   readonly property string phase: {
-    if (!root.loaded) return "loading"
+    if (!root.loaded || (ankiSource.inUse && !ankiSource.settled)) return "loading"
     if (root.deckError) return "error"
     if (root.current) return "reviewing"
-    if (!root.cards.length) return "empty"
+    if (!root.cards.length && !root.ankiTotal) return "empty"
     if (root.stats.waiting > 0) return "waiting"
     return "done"
   }
@@ -155,14 +194,41 @@ Item {
   readonly property string untilNext:
       root.stats.nextDue ? Anki.formatInterval(root.stats.nextDue - root.now) : ""
 
-  readonly property var preview: root.current
+  // Anki prices its own answers, FSRS or not, and says so with the card.
+  readonly property var preview: root.source === "anki" && ankiSource.card.intervals
+      ? ankiSource.card.intervals
+      : root.current
       ? Anki.previewIntervals(root.currentState, root.now)
       : ({ again: "", hard: "", good: "", easy: "" })
 
   // Recomputed whenever the deck, the progress, or the clock moves, which is
   // exactly when a statistic could have changed.
-  readonly property var deckStats:
-      Anki.deckStats(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay)
+  readonly property var deckStats: Anki.mergeStats(
+      Anki.deckStats(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay),
+      ankiSource.inUse ? ankiSource.stats : null)
+
+  // Something Anki said about the last answer or undo, for a few seconds:
+  // "reviewed elsewhere", "already synced".
+  property string ankiNotice: ""
+
+  Timer {
+    id: ankiNoticeTimer
+    interval: 6000
+    onTriggered: root.ankiNotice = ""
+  }
+
+  function sayAnki(text) {
+    root.ankiNotice = text
+    ankiNoticeTimer.restart()
+  }
+
+  // After a sync: what was answered here has gone to AnkiWeb and can no longer
+  // be taken back, and the phone's answers may have come in.
+  function syncFinished() {
+    root.undoStack = Anki.dropAnkiUndo(root.undoStack)
+    if (root.active) ankiSource.refresh()
+    else ankiSource.poll()
+  }
 
   signal graded(string grade)
   signal cardAdded()
@@ -194,6 +260,7 @@ Item {
       root.revealed = false
       root.answered = 0
       root.undoStack = []
+      root.pinSource = ""
       root.reload()
     }
   }
@@ -231,7 +298,7 @@ Item {
 
   // Every card starts at its top, and a reveal on a long one goes to where the
   // answer begins rather than leaving it below the fold.
-  onCurrentIdChanged: faceView.contentY = 0
+  onCurrentIdChanged: { faceView.contentY = 0; root.shownAt = Date.now() }
   onRevealedChanged: Qt.callLater(function() {
     faceView.contentY = root.revealed && root.faceScrolls
         ? Math.max(0, Math.min(rule.y, faceView.contentHeight - faceView.height)) : 0
@@ -240,7 +307,7 @@ Item {
   // ------------------------------------------------------------- the session
   function refresh() {
     root.now = Math.floor(Date.now() / 1000)
-    root.stats = Anki.counts(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay, root.caps)
+    root.jsonStats = Anki.counts(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay, root.caps)
   }
 
   function rebuild() {
@@ -271,7 +338,9 @@ Item {
   }
 
   function answer(g) {
-    if (root.phase !== "reviewing" || !root.revealed) return
+    if (root.phase !== "reviewing" || !root.revealed || ankiSource.busy) return
+    if (root.source === "anki") { root.answerAnki(g); return }
+    root.pinSource = ""
 
     var id = root.currentId
     var before = Anki.stateFor(root.progress, id)
@@ -301,6 +370,7 @@ Item {
     // answer removes its entry instead of leaving a zeroed one behind — which
     // would otherwise count against the day's new-card allowance forever.
     root.undoStack = root.undoStack.concat([{
+      source: "json",
       id: id,
       had: Object.prototype.hasOwnProperty.call(reviews, id),
       before: before
@@ -315,6 +385,32 @@ Item {
     root.graded(g)
   }
 
+  // An Anki card's answer is Anki's to make. The card stays face up until Anki
+  // has taken it, and comes down for the next one only then.
+  function answerAnki(g) {
+    var card = ankiSource.card
+    root.pinSource = ""
+    ankiSource.answer(card, g, Date.now() - root.shownAt, function(reply) {
+      if (reply.error) {
+        root.sayAnki(reply.error)
+        root.revealed = false
+        return
+      }
+      root.undoStack = root.undoStack.concat([{ source: "anki", id: card.id, undo: reply.undo }])
+          .slice(-Anki.UNDO_DEPTH)
+      if (reply.leech) {
+        root.leechNotice = reply.leech.suspended
+            ? "Leech — suspended after " + reply.leech.lapses + " lapses"
+            : "Leech — forgotten " + reply.leech.lapses + " times"
+        leechNoticeTimer.restart()
+      }
+      root.answered++
+      root.revealed = false
+      root.refresh()
+      root.graded(g)
+    })
+  }
+
   // Put every suspended card back in the rotation. The leech mark itself is
   // kept — the card has been trouble and the statistics should go on saying
   // so — so a restored card that keeps lapsing is raised again at the next
@@ -322,14 +418,19 @@ Item {
   //
   // Returns how many came back, so the caller can say so rather than leaving
   // the user to guess whether anything happened.
-  function restoreLeeches() {
+  //
+  // Anki's leeches come back through Anki, so the answer arrives later: cb(n)
+  // is called with both sides' total.
+  function restoreLeeches(cb) {
     var result = Anki.unsuspendAll(root.progress, root.now)
-    if (!result.restored) return 0
-
-    root.progress = result.progress
-    root.save()
-    root.rebuild()
-    return result.restored
+    if (result.restored) {
+      root.progress = result.progress
+      root.save()
+      root.rebuild()
+    }
+    ankiSource.restoreLeeches(function(reply) {
+      if (cb) cb(result.restored + (reply && reply.restored ? reply.restored : 0))
+    })
   }
 
   // Take back the last answer. The card returns to exactly the state it was in
@@ -337,11 +438,23 @@ Item {
   // the grade was wrong, so the next keystroke should be able to be the right
   // one.
   function undo() {
-    if (!root.undoStack.length) return
+    if (!root.undoStack.length || ankiSource.busy) return
 
     var stack = root.undoStack.slice()
     var last = stack.pop()
     root.undoStack = stack
+
+    if (last.source === "anki") {
+      ankiSource.undo(last.undo, function(reply) {
+        if (reply.error) { root.sayAnki(reply.error); return }
+        root.answered = Math.max(0, root.answered - 1)
+        root.leechNotice = ""
+        leechNoticeTimer.stop()
+        root.pinSource = "anki"
+        root.revealed = true
+      })
+      return
+    }
 
     var reviews = {}
     for (var key in root.progress.reviews) reviews[key] = root.progress.reviews[key]
@@ -367,6 +480,7 @@ Item {
     leechNoticeTimer.stop()
 
     root.pinned = last.id
+    root.pinSource = "json"
     root.rebuild()
     // After the rebuild, which clears it.
     root.revealed = true
@@ -396,6 +510,9 @@ Item {
   }
 
   function reload() {
+    // Anki's side first: it has its own process and does not wait on files.
+    if (root.active) ankiSource.refresh()
+    else ankiSource.poll()
     if (root.reading) { root.reloadQueued = true; return }
     root.reloadQueued = false
     root.deckRead = false
@@ -698,7 +815,17 @@ Item {
       root.refresh()
       // Only rebuild when something actually became available — rebuilding
       // every second would reset the card under the user's hands.
-      if (!was && root.stats.pending > 0) root.rebuild()
+      if (!was && root.jsonStats.pending > 0) root.rebuild()
+
+      // Anki is asked again only when it said something would change: its next
+      // learning card coming within learn-ahead, or its day rolling over.
+      if (ankiSource.reachable && !ankiSource.card && !ankiSource.busy) {
+        var c = ankiSource.counts
+        var clock = ankiSource.clock
+        var soon = c.nextDue && root.now >= c.nextDue - (clock.learnAheadSecs || 0)
+        var rolled = clock.dayCutoff && root.now >= clock.dayCutoff
+        if (soon || rolled) ankiSource.refresh()
+      }
     }
   }
 
@@ -869,6 +996,19 @@ Item {
       wrapMode: Text.Wrap
       text: root.libraryNotice
       color: root.urgent
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      visible: text !== ""
+      horizontalAlignment: Text.AlignHCenter
+      wrapMode: Text.Wrap
+      text: root.ankiNotice || ankiSource.notice
+      color: root.ankiNotice ? root.foreground : root.urgent
+      opacity: root.ankiNotice ? 0.7 : 1.0
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
     }

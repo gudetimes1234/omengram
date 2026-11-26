@@ -619,6 +619,22 @@ var TAG_SEP = "::"
 // it, or a selection could come to mean something else later.
 var RESERVED_DECK = "gleamdrill:"
 
+// Anki's collection, when there is one: the deck `anki:/Spanish/Verbs` is
+// Anki's `Spanish::Verbs`, and `anki:` is the whole collection. Its cards are
+// `anki-cid:<card id>` and are scheduled by Anki, never by this file.
+var ANKI_ROOT = "anki:"
+var ANKI_CARD = "anki-cid:"
+var RESERVED_DECKS = [RESERVED_DECK, ANKI_ROOT]
+
+function isAnkiDeck(id) {
+  var s = text(id)
+  return s === ANKI_ROOT || s.indexOf(ANKI_ROOT + DECK_SEP) === 0
+}
+
+function isAnkiCard(id) {
+  return text(id).indexOf(ANKI_CARD) === 0
+}
+
 // What a selection entry may say besides a plain id: `infra/.` is the deck
 // `infra` without the decks under it. It exists so that unticking one child of
 // a ticked parent can leave everything else the parent held.
@@ -654,6 +670,7 @@ function normalizeDecks(value) {
 }
 
 function lastPart(id, sep) {
+  if (sep === DECK_SEP && (id === ANKI_ROOT || id === ownOnly(ANKI_ROOT, sep))) return "Anki"
   var parts = id.split(sep)
   return parts[parts.length - 1] === "." ? parts[parts.length - 2] : parts[parts.length - 1]
 }
@@ -694,7 +711,7 @@ function parseListing(raw) {
     // form cannot be selected unambiguously, so it is not a deck.
     var parts = id.split(DECK_SEP)
     if (parts.some(function(p) { return !text(p) || p !== p.trim() || p === "." })) continue
-    if (id.indexOf(RESERVED_DECK) === 0) continue
+    if (RESERVED_DECKS.some(function(r) { return id.indexOf(r) === 0 })) continue
     out.push({ id: id, path: f[2], stamp: f[0] + ":" + f[1] })
   }
   out.sort(function(a, b) { return comparePaths(a.id, b.id, DECK_SEP) })
@@ -827,8 +844,14 @@ function toggleNode(rows, selected, id, sep) {
   return list
 }
 
+// While Anki cannot be reached its decks have no rows, and toggling a library
+// deck must not quietly drop the Anki decks that were picked.
 function toggleDeck(rows, selected, id) {
-  return toggleNode(rows, normalizeDecks(selected), id, DECK_SEP)
+  var list = normalizeDecks(selected)
+  var ankiShown = (rows || []).some(function(r) { return isAnkiDeck(r.id) })
+  if (ankiShown || isAnkiDeck(id)) return toggleNode(rows, list, id, DECK_SEP)
+  var kept = list.filter(isAnkiDeck)
+  return kept.concat(toggleNode(rows, list.filter(function(e) { return !isAnkiDeck(e) }), id, DECK_SEP))
 }
 
 function toggleTag(rows, selected, id) {
@@ -891,7 +914,7 @@ function deckRows(decks, progress, now) {
 //
 // Tags already picked get a row even when none of these cards carries one, or
 // a tag picked under other decks would go on filtering with no way to see it.
-function tagRows(cards, picked) {
+function tagRows(cards, picked, extraTotals) {
   var ids = {}
   normalizeTags(picked).forEach(function(id) {
     ids[id.slice(-TAG_SEP.length - 1) === TAG_SEP + "." ? id.slice(0, -TAG_SEP.length - 1) : id] = true
@@ -909,8 +932,40 @@ function tagRows(cards, picked) {
     })
     for (var id in mine) totals[id] = (totals[id] || 0) + 1
   })
+  // Anki's tags arrive already counted, parents included.
+  for (var extra in (extraTotals || {})) {
+    if (!Object.prototype.hasOwnProperty.call(extraTotals, extra)) continue
+    var tag = text(extra).toLowerCase()
+    if (!tag || tag.split(TAG_SEP).some(function(p) { return !p || p === "." })) continue
+    ids[tag] = true
+    totals[tag] = (totals[tag] || 0) + Math.max(0, Math.round(num(extraTotals[extra], 0)))
+  }
   var rows = buildTree(Object.keys(ids), TAG_SEP)
   rows.forEach(function(r) { r.total = totals[r.id] || 0 })
+  return rows
+}
+
+// Picker rows for Anki's decks, from the bridge's catalog: { id, total, due,
+// fresh } per deck, counts already including subdecks and Anki's limits, as
+// Anki's deck list shows them. The root row stands for the whole collection.
+function ankiDeckRows(list) {
+  var decks = (list || []).filter(function(d) { return d && isAnkiDeck(d.id) && d.id !== ANKI_ROOT })
+  if (!decks.length) return []
+  var rows = buildTree(decks.map(function(d) { return d.id }), DECK_SEP)
+  var at = {}
+  decks.forEach(function(d) { at[d.id] = d })
+  rows.forEach(function(r) {
+    var d = at[r.id]
+    r.total = d ? Math.max(0, num(d.total, 0)) : 0
+    r.due = d ? Math.max(0, num(d.due, 0)) : 0
+    r.fresh = d ? Math.max(0, num(d.fresh, 0)) : 0
+    if (r.id === ANKI_ROOT) r.name = "Anki"
+  })
+  rows.forEach(function(r) {
+    if (r.id !== ANKI_ROOT && r.depth === 1) {
+      rows[0].total += r.total; rows[0].due += r.due; rows[0].fresh += r.fresh
+    }
+  })
   return rows
 }
 
@@ -1065,7 +1120,7 @@ function admit(cards, progress, now, newPerDay, reviewsPerDay, caps) {
 // Which deck a new card goes to: the one on screen, else the first picked,
 // else the default file.
 function addTarget(current, decks, selected) {
-  if (current) return current
+  if (current && !isAnkiDeck(current)) return current
   var list = decks || []
   if (selected && selected.length)
     for (var i = 0; i < list.length; i++)
@@ -1660,4 +1715,141 @@ function findEntry(config, id) {
   }
 
   return {}
+}
+
+// --------------------------------------------------------------------- Anki
+//
+// Anki's cards reach the session through the bridge (bridge/omengram_bridge.py),
+// which asks Anki's own queue for them. These merge that side with the
+// library's, so both surfaces show one session.
+
+// Which of the two next cards to show: anything already due before anything
+// new, and Anki's before the library's within each, so a day split between the
+// two still puts the cards closest to being forgotten first.
+function pickSource(ankiCard, jsonCard, jsonState) {
+  var ankiDue = !!ankiCard && ankiCard.state && ankiCard.state.phase !== "new"
+  var jsonDue = !!jsonCard && !!jsonState && jsonState.phase !== "new"
+  if (ankiDue) return "anki"
+  if (jsonDue) return "json"
+  if (ankiCard) return "anki"
+  if (jsonCard) return "json"
+  return ""
+}
+
+// An Anki card's state in this file's shape, for the header line.
+function ankiState(card) {
+  var s = newState()
+  var st = (card && card.state) || {}
+  var phase = text(st.phase)
+  s.phase = ["new", "learning", "review", "relearning"].indexOf(phase) >= 0 ? phase : "review"
+  s.interval = Math.max(0, num(st.interval, 0))
+  s.ease = num(st.ease, 0) > 0 ? num(st.ease, 0) : STARTING_EASE
+  s.lapses = Math.max(0, num(st.lapses, 0))
+  s.reps = Math.max(0, num(st.reps, 0))
+  return s
+}
+
+// Headline numbers for both sides together. Anki's are its own, limits applied.
+function mergeCounts(json, anki) {
+  var j = json || {}
+  var a = anki || {}
+  function n(x) { return Math.max(0, Math.round(num(x, 0))) }
+  var nextDue = 0
+  ;[n(j.nextDue), n(a.nextDue)].forEach(function(d) {
+    if (d && (!nextDue || d < nextDue)) nextDue = d
+  })
+  var out = {
+    total: n(j.total) + n(a.total),
+    due: n(j.due) + n(a.due),
+    learning: n(j.learning) + n(a.learning),
+    fresh: n(j.fresh) + n(a.fresh),
+    waiting: n(j.waiting) + n(a.waiting),
+    nextDue: nextDue,
+    suspended: n(j.suspended),
+    held: n(j.held)
+  }
+  out.pending = out.due + out.fresh
+  return out
+}
+
+var STAT_SUMS = ["total", "fresh", "learning", "young", "mature", "reps", "lapses", "lapsed",
+                 "easeSum", "easeCount", "leeches", "suspended", "answeredToday",
+                 "introducedToday", "reviewsToday", "seen"]
+
+// The statistics tabs for both sides. Retention means different things on
+// each: the library has no review log, so its figure is a lifetime one, while
+// Anki's is the share of reviews passed over the last month. Each is weighted
+// by what it was measured on, and the label says which it is.
+function mergeStats(json, anki) {
+  var j = json || {}
+  var a = anki || {}
+  var hasJ = num(j.total, 0) > 0
+  var hasA = num(a.total, 0) > 0
+  var out = {}
+  STAT_SUMS.forEach(function(k) { out[k] = num(j[k], 0) + num(a[k], 0) })
+  out.forecast = []
+  for (var d = 0; d < 7; d++)
+    out.forecast.push(num((j.forecast || [])[d], 0) + num((a.forecast || [])[d], 0))
+  out.ease = out.easeCount ? out.easeSum / out.easeCount / 1000 : 0
+  var jw = hasJ ? num(j.reps, 0) : 0
+  var aw = hasA ? num(a.retentionReviews, 0) : 0
+  out.retention = jw + aw > 0 ? (num(j.retention, 0) * jw + num(a.retention, 0) * aw) / (jw + aw) : 0
+  out.retentionLabel = aw && !jw ? "passed, last " + num(a.retentionDays, 30) + " days"
+      : jw && !aw ? "never relearned" : "retained"
+  out.freshLeft = num(j.freshLeft, 0)
+  out.dueLeft = j.dueLeft === undefined ? Infinity : j.dueLeft
+  return out
+}
+
+// Undo entries are per source; after a sync the Anki ones can no longer be
+// taken back, so they are dropped and the library's kept.
+function dropAnkiUndo(stack) {
+  return (stack || []).filter(function(e) { return e && e.source !== "anki" })
+}
+
+// "3 min ago", for the sync line.
+function ago(seconds) {
+  var s = Math.max(0, Math.round(num(seconds, 0)))
+  if (s < 60) return "just now"
+  if (s < HOUR) return Math.floor(s / MINUTE) + " min ago"
+  if (s < DAY) return Math.floor(s / HOUR) + " h ago"
+  var days = Math.floor(s / DAY)
+  return days === 1 ? "yesterday" : days + " days ago"
+}
+
+// The sync status file, as written by bridge/cli.py.
+function parseSyncStatus(raw) {
+  try {
+    var d = JSON.parse(raw || "{}")
+    return d && typeof d === "object" && !Array.isArray(d) ? d : {}
+  } catch (e) {
+    return {}
+  }
+}
+
+// The one line under the hero that says how syncing stands: { text, urgent }.
+// Urgent is something only the reader can fix.
+var SYNC_URGENT = ["signedOut", "ankiOpenNoAddon", "fullSyncRequired", "auth", "incomplete", "error"]
+
+function syncLine(status, now, running) {
+  var st = status || {}
+  if (running) return { text: "Syncing with AnkiWeb…", urgent: false }
+  var last = num(st.lastSuccess, 0)
+  var since = last ? "last synced " + ago(now - last) : "never synced"
+  var code = text(st.status)
+  if (!code) return { text: "Not synced yet", urgent: false }
+  if (code === "ok") {
+    var parts = ["Synced " + ago(now - last)]
+    var pulled = num(st.pulled, 0)
+    var pushed = num(st.pushed, 0)
+    if (pulled) parts.push(pulled + (pulled === 1 ? " review" : " reviews") + " from AnkiWeb")
+    if (pushed) parts.push(pushed + " sent")
+    if (text(st.message)) parts.push(text(st.message))
+    return { text: parts.join("  ·  "), urgent: false }
+  }
+  if (code === "network") return { text: "Offline  ·  " + since, urgent: false }
+  if (code === "busy" || code === "pending")
+    return { text: (text(st.message) || "Still syncing") + "  ·  " + since, urgent: false }
+  var msg = text(st.message) || "Sync failed"
+  return { text: msg, urgent: SYNC_URGENT.indexOf(code) >= 0 }
 }

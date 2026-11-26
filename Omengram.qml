@@ -61,6 +61,18 @@ Item {
   readonly property bool leechSuspend: root.pluginSettings.leechSuspend !== false
   readonly property int lapsePercent:
       Anki.sanePerDay(root.pluginSettings.lapsePercent, Anki.LAPSE_PERCENT)
+  readonly property bool ankiEnabled: root.pluginSettings.anki !== false
+  readonly property string ankiProfile: String(root.pluginSettings.ankiProfile || "")
+
+  // The bar widget runs the timer; this surface shows how it stands, and can
+  // sync on request.
+  AnkiSync {
+    id: ankiSync
+    inUse: reviewer.anki.inUse && !reviewer.anki.absent
+    profile: root.ankiProfile
+    runsTimer: false
+    onSynced: reviewer.syncFinished()
+  }
 
   function studyEverything() {
     if (!root.shell || typeof root.shell.updateEntryInline !== "function") return
@@ -85,11 +97,12 @@ Item {
   }
 
   function restoreLeeches() {
-    var n = reviewer.restoreLeeches()
-    root.restoreNotice = n > 0
-        ? (n === 1 ? "1 card restored" : n + " cards restored")
-        : "No suspended cards to restore"
-    restoreNoticeTimer.restart()
+    reviewer.restoreLeeches(function(n) {
+      root.restoreNotice = n > 0
+          ? (n === 1 ? "1 card restored" : n + " cards restored")
+          : "No suspended cards to restore"
+      restoreNoticeTimer.restart()
+    })
   }
 
   // Which statistics tab is showing. Held here rather than in StatsView for
@@ -252,6 +265,7 @@ Item {
           else if (k === "4") reviewer.answer("easy")
           else if (k === "u") reviewer.undo()
           else if (k === "r") reviewer.reload()
+          else if (k === "y") ankiSync.syncNow()
           else return
           event.accepted = true
         }
@@ -377,6 +391,8 @@ Item {
             leechSuspend: root.leechSuspend
             lapsePercent: root.lapsePercent
             tags: root.tags
+            ankiEnabled: root.ankiEnabled
+            ankiProfile: root.ankiProfile
             active: root.opened
             foreground: root.foreground
             accent: Color.accent
@@ -437,11 +453,23 @@ Item {
                 ? reviewer.leechNotice + "  ·  s stats to restore"
                 : (reviewer.revealed ? "1-4 grade  ·  space good" : "space reveal")
                   + (reviewer.canUndo ? "  ·  u undo" : "")
-                  + "  ·  s stats  ·  a add  ·  esc close"
+                  + "  ·  s stats  ·  a add"
+                  + (ankiSync.inUse ? "  ·  y sync" : "")
+                  + "  ·  esc close"
             color: root.foreground
             opacity: 0.4
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
+          }
+
+          SyncStatus {
+            width: parent.width
+            visible: ankiSync.inUse && root.mode === "review"
+            sync: ankiSync
+            showButton: false
+            foreground: root.foreground
+            urgent: Color.urgent
+            fontFamily: root.fontFamily
           }
 
           Text {

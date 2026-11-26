@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "gudetimes",
   "license": "MIT",
-  "description": "Spaced-repetition flashcards in the bar",
+  "description": "Spaced-repetition flashcards in the bar, with your Anki collection",
   "kinds": [
     "overlay",
     "bar-widget"
@@ -29,7 +29,10 @@
       "showCount": true,
       "leechThreshold": 8,
       "leechSuspend": true,
-      "lapsePercent": 50
+      "lapsePercent": 50,
+      "anki": true,
+      "ankiProfile": "",
+      "syncInterval": 15
     },
     "schema": [
       {
@@ -99,6 +102,30 @@
         "label": "Suspend leeches",
         "defaultValue": true,
         "description": "Take a leech out of the rotation rather than only marking it. Restore them from the statistics view."
+      },
+      {
+        "key": "anki",
+        "type": "boolean",
+        "label": "Study Anki's collection",
+        "defaultValue": true,
+        "description": "Show your Anki decks beside the library and grade them on Anki's own schedule, so reviews reach AnkiWeb and your phone."
+      },
+      {
+        "key": "ankiProfile",
+        "type": "string",
+        "label": "Anki profile",
+        "defaultValue": "",
+        "description": "Which Anki profile to use. Leave empty for the only one there is."
+      },
+      {
+        "key": "syncInterval",
+        "type": "integer",
+        "label": "Sync every (minutes)",
+        "min": 0,
+        "max": 120,
+        "step": 5,
+        "defaultValue": 15,
+        "description": "How often the bar syncs with AnkiWeb, after a first sync shortly after login. 0 syncs only when asked."
       }
     ]
   }

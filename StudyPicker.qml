@@ -52,8 +52,11 @@ Item {
   // the list back and drop the hover under the pointer.
   property var deckRows: []
 
+  // Anki's tags come counted by the bridge, for the decks picked there.
   readonly property var tagRows: root.reviewer && root.active
-      ? Anki.tagRows(root.reviewer.pickedCards, root.tags) : []
+      ? Anki.tagRows(root.reviewer.pickedCards, root.tags, root.ankiRowsReady ? root.reviewer.anki.tagTotals : null) : []
+  readonly property bool ankiRowsReady: !!root.reviewer && root.reviewer.anki.inUse
+  readonly property bool hasAnki: root.deckRows.some(function(r) { return Anki.isAnkiDeck(r.id) })
 
   readonly property var rows: {
     if (root.tab === 0) return [root.everything("All decks")].concat(root.deckRows)
@@ -71,18 +74,32 @@ Item {
     return { id: "", name: name, depth: 0, total: -1, due: 0, fresh: 0 }
   }
 
+  // The library's decks, then Anki's under its own root.
   function recount() {
     root.deckRows = root.reviewer
-        ? Anki.deckRows(root.reviewer.library, root.reviewer.progress, root.reviewer.now) : []
+        ? Anki.deckRows(root.reviewer.library, root.reviewer.progress, root.reviewer.now)
+            .concat(root.ankiRowsReady ? root.reviewer.anki.rows : [])
+        : []
   }
 
-  onActiveChanged: if (root.active) { root.cursor = 0; list.contentY = 0; root.recount() }
+  function fetchAnki() {
+    if (root.ankiRowsReady) root.reviewer.anki.loadCatalog()
+  }
+
+  onActiveChanged: if (root.active) { root.cursor = 0; list.contentY = 0; root.recount(); root.fetchAnki() }
+  // Which Anki tags there are depends on which Anki decks are picked.
+  onScopeDecksChanged: if (root.active) root.fetchAnki()
   onTabChanged: { root.cursor = 0; list.contentY = 0 }
   onRowsChanged: if (root.cursor >= root.rows.length) root.cursor = Math.max(0, root.rows.length - 1)
 
   Connections {
     target: root.reviewer
     function onLibraryChanged() { if (root.active) root.recount() }
+  }
+
+  Connections {
+    target: root.reviewer ? root.reviewer.anki : null
+    function onRowsChanged() { if (root.active) root.recount() }
   }
 
   // ------------------------------------------------------------------ keys
@@ -152,7 +169,7 @@ Item {
   }
 
   // ---------------------------------------------------------------- render
-  implicitHeight: heading.height + list.height
+  implicitHeight: heading.height + list.height + (footnote.visible ? footnote.implicitHeight + Style.spacing.sm : 0)
 
   Item {
     id: heading
@@ -367,6 +384,22 @@ Item {
         }
       }
     }
+  }
+
+  // Anki keeps its own limits, so the ones here can only take from them.
+  Text {
+    id: footnote
+    textFormat: Text.PlainText
+    visible: root.tab === 2 && root.hasAnki
+    anchors.top: list.bottom
+    anchors.topMargin: Style.spacing.sm
+    width: parent.width
+    wrapMode: Text.Wrap
+    text: "Anki decks keep Anki's own limits; these can only lower them. Whole day is for library decks."
+    color: root.foreground
+    opacity: 0.45
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
   }
 
   // A list longer than the panel says so; nothing else here would.

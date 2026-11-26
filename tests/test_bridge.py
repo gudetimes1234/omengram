@@ -102,6 +102,8 @@ class BridgeTest(unittest.TestCase):
         out = self.run_cmd("next", decks=["infra/backend"])
         self.assertIsNone(out["card"])
         self.assertEqual(out["counts"]["pending"], 0)
+        self.assertEqual(out["counts"]["total"], 0)
+        self.assertEqual(out["counts"]["collection"], 10)
 
     def test_subdeck_and_own_only(self):
         self.assertEqual(sorted(self.fronts(["anki:/Spanish/Verbs"])), ["verb0", "verb1", "verb2"])

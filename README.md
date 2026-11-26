@@ -75,7 +75,57 @@ change saved as it is made:
 The overlay studies the same selection. The header names it (`NEW · infra ·
 #sd`), so a short session is never mistaken for an empty library.
 
-## Bringing decks over from Anki
+## Studying your Anki collection
+
+If Anki is installed, its decks appear in the picker under **Anki**, beside the
+library, and are studied straight from Anki's collection:
+
+- **Anki schedules them.** Each grade is a real Anki review, with Anki's deck
+  options, learning steps, FSRS if you use it, sibling burying and limits. The
+  grade buttons show Anki's own intervals.
+- **Syncing reaches your phone.** omengram syncs the collection with AnkiWeb,
+  so reviews done here show up in AnkiDroid (or AnkiMobile) after it syncs, and
+  reviews done there show up here. Press **Sync** in the bar panel or `y` on
+  either surface; the bar also syncs 30 seconds after login and every 15
+  minutes (`syncInterval`). The line above the card says how the last sync
+  went, and in red when it needs you.
+- **Limits only narrow.** A deck limit set in the picker can lower what Anki
+  serves that day but never raise it. Tags narrow Anki's day too; to study by
+  tag across limits, make a filtered deck in Anki.
+- **Undo** works until the review has been synced. After that the answer is on
+  AnkiWeb and Anki's own undo is the place for it.
+
+### While Anki is open
+
+Anki locks its collection while it runs. Install the small add-on in
+`anki-addon/` and omengram goes through Anki instead, and a sync is Anki's own
+sync, dialogs and all:
+
+```bash
+ln -s ~/github/omarchy-plugins/omengram/anki-addon ~/.local/share/Anki2/addons21/omengram_bridge
+```
+
+Restart Anki once. The add-on listens on `127.0.0.1:8767` only. Without it,
+omengram says Anki is open and waits for it to close.
+
+### While Anki is closed
+
+omengram opens the collection for each request and closes it again, and makes
+Anki's own backup before the first change each day. It syncs with the login
+Anki already has, read from Anki's profile; the key is never copied, printed or
+stored. Sign in to AnkiWeb in Anki once first. Two things are left to Anki:
+
+- **A one-way sync.** When AnkiWeb and the collection can't be merged, omengram
+  never picks a side. Open Anki and sync there.
+- **Media.** Cards show as text here, so pictures and sounds are synced by Anki,
+  not by omengram.
+
+Set `anki` to `false` to leave Anki out entirely.
+
+## Copying decks over from Anki
+
+For studying Anki cards on omengram's own schedule instead, with nothing
+written back:
 
 ```bash
 /usr/local/share/anki/python/bin/python3 tools/import_anki.py --dry-run
@@ -138,6 +188,7 @@ same restart clears it.
 | `space` / `enter` | Reveal the answer, then grade it Good |
 | `1` `2` `3` `4` | Again / Hard / Good / Easy |
 | `u` | Undo the last answer |
+| `y` | Sync with AnkiWeb |
 | `d` | Choose what to study (bar panel only) |
 | `↑` `↓` | Scroll a long card |
 | `s` | Statistics |
@@ -303,6 +354,12 @@ hot-reloads on save.
 | `lapsePercent` | `50` | How much of a forgotten card's interval survives, as a percentage. `0` is Anki's default. |
 | `leechThreshold` | `8` | Lapses before a card counts as a leech. `0` turns leeches off. |
 | `leechSuspend` | `true` | Take a leech out of the rotation rather than only marking it. |
+| `anki` | `true` | Study Anki's collection beside the library. |
+| `ankiProfile` | *(the only one)* | Which Anki profile to use. |
+| `syncInterval` | `15` | Minutes between syncs with AnkiWeb. `0` syncs only when asked. |
+
+`newPerDay`, `reviewsPerDay`, `lapsePercent` and the leech settings apply to
+library decks. Anki decks use their own deck options in Anki.
 
 ```json
 { "id": "gudetimes.omengram", "newPerDay": 10, "decks": ["spanish"], "tags": ["verbs"] }
@@ -452,10 +509,14 @@ widget, so a key added to an existing entry needs `omarchy restart shell`.
 
 ## Requirements
 
-Omarchy 4 (Quattro) or newer. No external dependencies, no packages to
-install, no network access, and no privileged operations — the plugin is QML
-and JavaScript running inside the existing `omarchy-shell` process, and uses
-only the shell's own `qs.Ui` and `qs.Commons` modules.
+Omarchy 4 (Quattro) or newer. No packages to install and no privileged
+operations — the plugin is QML and JavaScript running inside the existing
+`omarchy-shell` process, and uses only the shell's own `qs.Ui` and `qs.Commons`
+modules.
+
+Studying Anki's collection needs Anki itself (tested with 26.09): the bridge in
+`bridge/` runs under Anki's bundled Python and Anki's own library. Syncing is
+the one thing that uses the network, and only to AnkiWeb.
 
 `node` is needed to run the test suite, but never to use the plugin.
 
@@ -465,6 +526,13 @@ Worth knowing before you point this at your notes.
 
 **`~/.local/state/omarchy/omengram.json`** — scheduling progress, written on
 every answer. Entirely the plugin's own file.
+
+**Your Anki collection**, when an Anki card is answered, undone or restored:
+the same changes Anki makes when you review there. The selected deck is put
+back afterwards, and Anki's backup runs first each day.
+
+**`~/.local/state/omarchy/omengram-sync.json`** — how the last sync went, mode
+600, with no login in it.
 
 **The decks in `~/.local/share/omengram`**. A card added with `a` goes to the deck
 of the card on screen, and the composer says which. Only ever appended to, and
@@ -579,6 +647,17 @@ plugin does, and prints all three paths when it starts.
 Assertions poll rather than sleep: every action starts a read, a merge and a
 write, so a fixed sleep tests the machine's mood rather than the plugin.
 
+The Anki side runs against a throwaway collection with made-up decks, never
+yours, under Anki's own Python:
+
+```bash
+/usr/local/share/anki/python/bin/python3 -I tests/test_bridge.py
+/usr/local/share/anki/python/bin/python3 -I tests/test_sync.py
+```
+
+The sync tests use a fake AnkiWeb, a fake login, and a fake Anki window for
+the add-on, so they need no network and no account.
+
 ## Layout
 
 | File | What it is |
@@ -592,6 +671,12 @@ write, so a fixed sleep tests the machine's mood rather than the plugin.
 | `StatsTabs.qml` | The tab strip, which rides on the panel's section header. |
 | `StudyPicker.qml` | Decks, tags and limits, behind `d` in the bar panel. |
 | `tools/import_anki.py` | Copies an Anki collection into the library, once. |
+| `AnkiSource.qml` | Anki's side of a session: its next card, counts and decks. |
+| `AnkiBridge.qml` | The connection to `bin/omengram-anki`, one process per surface. |
+| `AnkiSync.qml` | Syncing with AnkiWeb, and the timer the bar runs. |
+| `SyncStatus.qml` | The sync line and its button. |
+| `bridge/` | The Python side, run under Anki's Python: reading and answering cards, syncing. |
+| `anki-addon/` | The add-on that lets all of it go through Anki while Anki is open. |
 | `Panel.qml` | The bar widget and the panel chrome around the session. |
 | `Omengram.qml` | The fullscreen overlay chrome around the same session. |
 

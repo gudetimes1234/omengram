@@ -329,7 +329,7 @@ Item {
         wrapMode: Text.Wrap
         text: root.stats
             ? "ease " + root.stats.ease.toFixed(2)
-              + "  ·  " + Anki.percent(root.stats.retention) + " never relearned"
+              + "  ·  " + Anki.percent(root.stats.retention) + " " + (root.stats.retentionLabel || "never relearned")
               + "  ·  " + root.stats.lapsed + (root.stats.lapsed === 1 ? " lapsed card" : " lapsed cards")
             : ""
         color: root.foreground

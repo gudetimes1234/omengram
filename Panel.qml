@@ -30,6 +30,10 @@ Panel {
   // The count is the point of the widget, but a bar that has to stay narrow
   // can turn it off and keep the glyph.
   readonly property bool showCount: root.setting("showCount", true) !== false
+  // Anki's collection beside the library, and how often to sync it.
+  readonly property bool ankiEnabled: root.setting("anki", true) !== false
+  readonly property string ankiProfile: String(root.setting("ankiProfile", "") || "")
+  readonly property int syncInterval: Anki.sanePerDay(root.setting("syncInterval", 15), 15)
 
   // The bar sizes a widget from its implicit size, and Ui.Panel is a bare Item
   // with none — without this the widget occupies 0x0 and draws nothing.
@@ -68,11 +72,12 @@ Panel {
   // Restoring is offered wherever the leech count is. Until the panel had a
   // statistics view it had neither, and said so by pointing at the overlay.
   function restoreLeeches() {
-    var n = reviewer.restoreLeeches()
-    root.restoreNotice = n > 0
-        ? (n === 1 ? "1 card restored" : n + " cards restored")
-        : "No suspended cards to restore"
-    restoreNoticeTimer.restart()
+    reviewer.restoreLeeches(function(n) {
+      root.restoreNotice = n > 0
+          ? (n === 1 ? "1 card restored" : n + " cards restored")
+          : "No suspended cards to restore"
+      restoreNoticeTimer.restart()
+    })
   }
 
   property string restoreNotice: ""
@@ -191,6 +196,7 @@ Panel {
         if (k === "s") root.toggleStats()
         else if (k === "d") root.togglePick()
         else if (k === "r") reviewer.reload()
+        else if (k === "y") ankiSync.syncNow()
         else if (root.mode === "pick") {
           if (k === "+" || k === "=") picker.adjust(1)
           else if (k === "-") picker.adjust(-1)
@@ -261,6 +267,26 @@ Panel {
               }
             }
           }
+        }
+
+        // Syncing is this widget's job: it is the surface that is always
+        // there, so its timer is the one that runs.
+        AnkiSync {
+          id: ankiSync
+          inUse: reviewer.anki.inUse && !reviewer.anki.absent
+          profile: root.ankiProfile
+          runsTimer: true
+          interval: root.syncInterval
+          onSynced: reviewer.syncFinished()
+        }
+
+        SyncStatus {
+          width: parent.width
+          visible: ankiSync.inUse && root.mode === "review"
+          sync: ankiSync
+          foreground: root.foreground
+          urgent: root.urgent
+          fontFamily: root.fontFamily
         }
 
         PanelSeparator {
@@ -380,6 +406,8 @@ Panel {
           leechSuspend: root.leechSuspend
           lapsePercent: root.lapsePercent
           tags: root.tags
+          ankiEnabled: root.ankiEnabled
+          ankiProfile: root.ankiProfile
           active: root.opened
           foreground: root.foreground
           accent: Color.accent
@@ -427,7 +455,9 @@ Panel {
               return reviewer.leechNotice + "  ·  s statistics to restore"
             return (reviewer.revealed ? "1-4 grade  ·  space good" : "space reveal")
                 + (reviewer.canUndo ? "  ·  u undo" : "")
-                + "  ·  d decks  ·  s stats  ·  esc close"
+                + "  ·  d decks  ·  s stats"
+                + (ankiSync.inUse ? "  ·  y sync" : "")
+                + "  ·  esc close"
           }
           color: root.foreground
           opacity: 0.4

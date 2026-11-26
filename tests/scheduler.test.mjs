@@ -34,6 +34,8 @@ const EXPORTS = [
   "parseListing", "buildDeckTree", "nodeState", "toggleDeck", "toggleTag", "assignDeck",
   "mergeDecks", "deckRows", "tagRows", "normalizeLimits", "withLimit", "stepLimit",
   "deckBudgets", "admit", "addTarget",
+  "ANKI_ROOT", "isAnkiDeck", "isAnkiCard", "ankiDeckRows", "pickSource", "ankiState",
+  "mergeCounts", "mergeStats", "dropAnkiUndo", "ago", "parseSyncStatus", "syncLine",
 ]
 const G = {}
 new Function("exports", `${src}\nfor (const k of ${JSON.stringify(EXPORTS)}) exports[k] = eval(k)`)(G)
@@ -1439,6 +1441,97 @@ group("settings are found wherever the widget sits")
 for (const s of ["left", "centerBegin", "center", "centerEnd", "right", "tray"])
   t("in " + s, G.findEntry({ bar: { layout: { [s]: [{ id: "p", tags: ["x"] }] } } }, "p").tags?.[0] === "x")
 
+group("Anki decks in the picker")
+{
+  const rows = G.ankiDeckRows([
+    { id: "anki:/Spanish", name: "Spanish", total: 7, due: 2, fresh: 5 },
+    { id: "anki:/Spanish/Verbs", name: "Spanish::Verbs", total: 3, due: 1, fresh: 2 },
+    { id: "anki:/Python", name: "Python", total: 2, due: 0, fresh: 2 },
+  ])
+  t("a root row for the whole collection comes first", rows[0].id === "anki:" && rows[0].name === "Anki" && !rows[0].own)
+  t("the root sums the top decks only", rows[0].total === 9 && rows[0].due === 2 && rows[0].fresh === 7)
+  t("subdecks sit under their parent", rows.find((r) => r.id === "anki:/Spanish/Verbs").parent === "anki:/Spanish")
+  t("nothing from Anki is no rows", G.ankiDeckRows([]).length === 0)
+  t("ids", G.isAnkiDeck("anki:") && G.isAnkiDeck("anki:/a") && !G.isAnkiDeck("anki") && !G.isAnkiDeck("ankix/a"))
+  t("cards", G.isAnkiCard("anki-cid:12") && !G.isAnkiCard("anki:guid:0"))
+
+  const all = rows.concat(G.deckRows([deckOf("infra", "1")], G.emptyProgress(), NOW))
+  t("ticking an Anki subdeck", JSON.stringify(G.toggleDeck(all, [], "anki:/Spanish/Verbs")) === '["anki:/Spanish/Verbs"]')
+  t("ticking every top deck folds into the root",
+    JSON.stringify(G.toggleDeck(all, ["anki:/Spanish"], "anki:/Python")) === '["anki:"]')
+  const libOnly = G.deckRows([deckOf("infra", "1"), deckOf("go", "2")], G.emptyProgress(), NOW)
+  t("Anki picks survive while Anki is away",
+    JSON.stringify(G.toggleDeck(libOnly, ["anki:/Spanish", "infra"], "go")) === '["anki:/Spanish","infra","go"]')
+  t("the root is named in the header", G.scopeLabel(["anki:"], []) === "Anki")
+  t("a library file may not claim the Anki prefix",
+    G.parseListing("1\t2\tanki:/x.json\n1\t2\tok.json").map((f) => f.id).join() === "ok")
+  t("a card is never added to an Anki deck", G.addTarget("anki:/Spanish", [deckOf("a", "1")], []) === "cards")
+
+  const tags = G.tagRows([{ id: "1", tags: ["code"] }], ["gone"], { "grammar": 5, "grammar::verbs": 3, "code": 1 })
+  const tag = (id) => tags.find((r) => r.id === id)
+  t("Anki's tag counts join the library's", tag("code").total === 2 && tag("grammar").total === 5)
+  t("and nest", tag("grammar::verbs").parent === "grammar")
+  t("a picked tag keeps its row", tag("gone").total === 0)
+}
+
+group("one session from two sources")
+{
+  const ankiNew = { id: "anki-cid:1", state: { phase: "new" } }
+  const ankiDue = { id: "anki-cid:2", state: { phase: "review" } }
+  const card = { id: "x" }
+  const fresh = G.newState()
+  const due = Object.assign(G.newState(), { phase: "review" })
+  t("Anki's due card first", G.pickSource(ankiDue, card, due) === "anki")
+  t("then the library's due card", G.pickSource(ankiNew, card, due) === "json")
+  t("then Anki's new card", G.pickSource(ankiNew, card, fresh) === "anki")
+  t("then the library's", G.pickSource(null, card, fresh) === "json")
+  t("nothing", G.pickSource(null, null, null) === "")
+
+  const st = G.ankiState({ state: { phase: "relearning", interval: 86400, ease: 2300, lapses: 2, reps: 9 } })
+  t("Anki's state reads like ours", st.phase === "relearning" && st.lapses === 2 && st.ease === 2300)
+  t("in the header", G.sectionLabel("reviewing", st, [], []).indexOf("RELEARNING  ·  2 lapses") === 0)
+
+  const c = G.mergeCounts({ total: 3, due: 1, fresh: 2, learning: 0, waiting: 1, nextDue: NOW + 50, held: 4 },
+                          { total: 10, due: 2, fresh: 5, learning: 1, waiting: 1, nextDue: NOW + 20 })
+  t("counts add up", c.total === 13 && c.due === 3 && c.fresh === 7 && c.pending === 10 && c.held === 4)
+  t("the sooner learning card wins", c.nextDue === NOW + 20 && c.waiting === 2)
+  t("Anki missing", G.mergeCounts({ due: 1, fresh: 1 }, null).pending === 2)
+
+  const s = G.mergeStats(
+    { total: 4, fresh: 1, reps: 10, easeSum: 5000, easeCount: 2, retention: 0.5, forecast: [1, 0, 0, 0, 0, 0, 0], freshLeft: 3 },
+    { total: 6, fresh: 2, reps: 30, easeSum: 2500, easeCount: 1, retention: 0.9, retentionReviews: 30,
+      retentionDays: 30, forecast: [2, 1, 0, 0, 0, 0, 0] })
+  t("totals add", s.total === 10 && s.fresh === 3 && s.forecast[0] === 3 && s.forecast[1] === 1)
+  t("ease from the sums", Math.abs(s.ease - 2.5) < 1e-9)
+  t("retention weighted by what it measured", Math.abs(s.retention - 0.8) < 1e-9 && s.retentionLabel === "retained")
+  t("Anki alone says what it measured",
+    G.mergeStats({ total: 0 }, { total: 2, retention: 1, retentionReviews: 4, retentionDays: 30 }).retentionLabel
+      === "passed, last 30 days")
+  t("library alone is unchanged", G.mergeStats({ total: 1, reps: 2, retention: 0.5 }, null).retentionLabel === "never relearned")
+
+  const stack = [{ source: "anki", id: "anki-cid:1" }, { id: "x", had: true }, { source: "json", id: "y" }]
+  t("a sync drops only Anki's undo", G.dropAnkiUndo(stack).map((e) => e.id).join() === "x,y")
+}
+
+group("the sync line")
+{
+  const at = NOW - 3 * 60
+  t("never", G.syncLine({}, NOW, false).text === "Not synced yet")
+  t("running", G.syncLine({ status: "ok" }, NOW, true).text === "Syncing with AnkiWeb…")
+  t("ok", G.syncLine({ status: "ok", lastSuccess: at, pulled: 4 }, NOW, false).text
+    === "Synced 3 min ago  ·  4 reviews from AnkiWeb")
+  t("one review", G.syncLine({ status: "ok", lastSuccess: at, pulled: 1, pushed: 2 }, NOW, false).text
+    === "Synced 3 min ago  ·  1 review from AnkiWeb  ·  2 sent")
+  const off = G.syncLine({ status: "network", lastSuccess: NOW - 2 * 3600 }, NOW, false)
+  t("offline is not the reader's to fix", off.text === "Offline  ·  last synced 2 h ago" && !off.urgent)
+  const out = G.syncLine({ status: "signedOut", message: "Not signed in to AnkiWeb — sync once from Anki" }, NOW, false)
+  t("signed out is", out.urgent && out.text.indexOf("Not signed in") === 0)
+  t("a one-way sync is", G.syncLine({ status: "fullSyncRequired", message: "m" }, NOW, false).urgent)
+  t("ago", G.ago(30) === "just now" && G.ago(DAY + 5) === "yesterday" && G.ago(3 * DAY) === "3 days ago")
+  t("a broken status file is no status", JSON.stringify(G.parseSyncStatus("{oops")) === "{}"
+    && JSON.stringify(G.parseSyncStatus("[1]")) === "{}")
+}
+
 // This is a fork installed beside the plugin it came from. Anything that still
 // answers to that plugin's name shares its decks, its progress or its IPC, and
 // merging from it is how one gets back in.
@@ -1446,7 +1539,8 @@ group("nothing answers to the plugin this was forked from")
 {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..")
   const shipped = ["manifest.json", ...readdirSync(root).filter((f) => /\.(qml|js)$/.test(f)),
-    ...readdirSync(join(root, "tools")).filter((f) => f.endsWith(".py")).map((f) => "tools/" + f)]
+    ...["tools", "bridge", "anki-addon", "bin"].flatMap((d) =>
+      readdirSync(join(root, d)).filter((f) => /\.py$|^[a-z-]+$/.test(f)).map((f) => d + "/" + f))]
   t("there are files to check", shipped.length > 10)
   for (const f of shipped)
     t(f, !/omanki|yamz8/i.test(readFileSync(join(root, f), "utf8")))

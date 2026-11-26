@@ -13,7 +13,7 @@ the phone, and every answer lands in the review log that AnkiWeb carries to
 other devices. What omengram adds only narrows Anki's queue: which decks, which
 tags, and per-deck caps that can lower Anki's limits but never raise them.
 
-Ported from niri-omanki's bridge (bridge/omanki_bridge.py there).
+Ported from the bridge in the author's earlier niri fork of this plugin.
 """
 
 import base64
@@ -505,6 +505,9 @@ def _counts(col, scope, queued_counts):
         "waiting": waiting,
         "nextDue": next_due,
         "total": len(scope.card_ids()),
+        # Whether there is anything at all, so "nothing matches" can be told
+        # apart from "nothing there".
+        "collection": int(col.db.scalar("select count() from cards") or 0),
     }
 
 
