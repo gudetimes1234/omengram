@@ -33,6 +33,22 @@ jobs:
       - name: Rendering-safety tests
         run: node tests/rendering.test.mjs
 
+      # The Anki bridge runs Anki's own scheduler, so its tests need Anki's
+      # library. Each builds a throwaway collection, and the sync tests stand
+      # in for AnkiWeb: nothing leaves the runner.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Anki's Python library
+        run: pip install anki
+
+      - name: Bridge, sync and import tests
+        run: |
+          python tests/test_bridge.py
+          python tests/test_sync.py
+          python tests/test_import.py
+
       # tests/soak.sh is deliberately not run here. It drives the real shell
       # with real keystrokes and needs a Wayland compositor, a running
       # omarchy-shell, and the keyboard focus of the machine it runs on. It

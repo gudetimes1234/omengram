@@ -4,8 +4,7 @@
     # or, with `pip install anki`:
     python3 tests/test_import.py
 
-Nothing here touches your own collection or library. Not run in CI, which has
-no Anki.
+Nothing here touches your own collection or library.
 """
 
 import hashlib
