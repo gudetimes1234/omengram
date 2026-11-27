@@ -264,6 +264,7 @@ Item {
           else if (k === "4") reviewer.answer("easy")
           else if (k === "u") reviewer.undo()
           else if (k === "i") reviewer.startTyping()
+          else if (k === "t") reviewer.runTests()
           else if (k === "r") reviewer.reload()
           else if (k === "y") ankiSync.syncNow()
           else return
@@ -455,9 +456,11 @@ Item {
             text: reviewer.leechNotice
                 ? reviewer.leechNotice + "  ·  s stats to restore"
                 : reviewer.typing
-                ? "ctrl+enter check  ·  tab indent  ·  esc leave the editor"
+                ? "ctrl+enter check" + (reviewer.canRun ? "  ·  ctrl+r run tests" : "")
+                  + "  ·  tab indent  ·  esc leave the editor"
                 : (reviewer.revealed ? "1-4 grade  ·  space good"
-                   : reviewer.canType ? "i type  ·  space reveal" : "space reveal")
+                   : reviewer.canType ? "i type" + (reviewer.canRun ? "  ·  t run tests" : "")
+                     + "  ·  space reveal" : "space reveal")
                   + (reviewer.canUndo ? "  ·  u undo" : "")
                   + "  ·  s stats  ·  a add"
                   + (ankiSync.inUse ? "  ·  y sync" : "")

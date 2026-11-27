@@ -74,6 +74,8 @@ Item {
   }
 
   // Every answer to a library card, for the statistics. Anki keeps its own.
+  Runner { id: runner }
+
   ReviewLog {
     id: reviewLog
     stateDir: root.stateDir
@@ -149,7 +151,7 @@ Item {
   // card; for a drill, "free" once typed and checked, "recall" when revealed
   // without typing.
   readonly property string answerMode: !root.currentDrill ? "card"
-      : root.checkResult ? "free" : "recall"
+      : (root.checkResult || runner.result) ? "free" : "recall"
 
   // Typing an answer, which only a surface with room for an editor offers:
   // the overlay. The bar panel shows drills as recall.
@@ -161,6 +163,12 @@ Item {
   readonly property string typed: editor.text
   property var checkResult: null
   readonly property bool typing: editor.editing
+  // A code drill with tests, typed in the overlay, can run them (bridge/run.py,
+  // inside bubblewrap). Running never reveals the answer.
+  readonly property bool canRun: root.canType && root.currentDrill.kind === "code"
+      && !!root.currentDrill.harness
+  readonly property bool runningTests: runner.running
+  readonly property var runResult: runner.result
 
   // The editor has given the keys back, and the surface's own shortcuts should
   // have them again.
@@ -366,6 +374,13 @@ Item {
   function resetDrill() {
     editor.clear()
     root.checkResult = null
+    runner.cancel()
+  }
+
+  // Run what has been typed against the card's tests.
+  function runTests() {
+    if (!root.canRun || root.typed.trim() === "") return
+    runner.run(root.currentDrill.lang, root.typed, root.currentDrill.harness)
   }
 
   // Into the editor, for a drill not yet answered.
@@ -437,7 +452,8 @@ Item {
     // would otherwise count against the day's new-card allowance forever.
     var record = Anki.logRecord({
       card: root.current, before: before, after: after, grade: g, now: root.now,
-      ms: Date.now() - root.shownAt, mode: root.answerMode
+      ms: Date.now() - root.shownAt, mode: root.answerMode,
+      revealed: root.revealed, tests: runner.tally()
     })
 
     root.undoStack = root.undoStack.concat([{
@@ -964,8 +980,11 @@ Item {
             placeholder: !root.currentDrill ? ""
                 : root.currentDrill.kind === "code"
                 ? "type the " + root.currentDrill.lang + " solution  ·  ctrl+enter to check"
+                  + (root.canRun ? "  ·  ctrl+r to run the tests" : "")
                 : "type the answer  ·  ctrl+enter to check"
+            canRun: root.canRun
             onSubmitted: root.checkTyped()
+            onRunRequested: root.runTests()
             onEscaped: root.stopTyping()
           }
 
@@ -977,6 +996,17 @@ Item {
             height: Math.max(1, Style.space(1))
             visible: root.revealed
             color: Util.alpha(root.foreground, 0.15)
+          }
+
+          RunResults {
+            width: parent.width
+            visible: root.canRun && (runner.running || runner.result !== null)
+            result: runner.result
+            running: runner.running
+            foreground: root.foreground
+            accent: root.accent
+            urgent: root.urgent
+            fontSize: Math.round(root.answerFontSize * 0.7)
           }
 
           DiffView {

@@ -56,8 +56,25 @@ jobs:
           python tests/test_bridge.py
           python tests/test_sync.py
           python tests/test_import.py
-          python tests/test_import_gleamdrill.py
 
+      # Running a drill's tests happens only inside bubblewrap. Ubuntu's
+      # runners ship without it and, through AppArmor, refuse the unprivileged
+      # user namespaces it needs; both are put right for this throwaway VM. If
+      # the sandbox still cannot start, the sandboxed tests skip: they never
+      # run the code any other way. prlimit keeps the runs that are meant to
+      # blow up (fork bomb, runaway loop) from leaving core dumps.
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Sandboxed test-runner tests
+        run: |
+          prlimit --core=1:1 -- python tests/test_runner.py
+          prlimit --core=1:1 -- python tests/test_import_gleamdrill.py
+
+      # tests/qml/run.sh, like soak.sh below, needs a Wayland session, so it
+      # is local only.
       # tests/soak.sh is deliberately not run here. It drives the real shell
       # with real keystrokes and needs a Wayland compositor, a running
       # omarchy-shell, and the keyboard focus of the machine it runs on. It

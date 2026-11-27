@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs a drill's solution against its tests, inside bubblewrap. Reads one JSON
+# request on stdin and prints one JSON line. See bridge/run.py.
+here=$(dirname "$(readlink -f "$0")")
+exec python3 -I "$here/../bridge/run.py"

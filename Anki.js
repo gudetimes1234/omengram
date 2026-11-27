@@ -1711,7 +1711,7 @@ function logRecord(o) {
     rid: text(o.rid) || (Math.round(now * 1000) + "-" + Math.floor(num(o.salt, Math.random()) * 1e6)),
     card: text(card.id),
     deck: text(card.deck),
-    kind: text(card.kind) || "basic",
+    kind: text(card.kind) || (card.drill ? text(card.drill.kind) : "") || "basic",
     at: now,
     rating: GRADES.indexOf(o.grade) + 1,
     sb: before.phase,

@@ -477,6 +477,24 @@ the one thing that uses the network, and only to AnkiWeb.
 
 `node` is needed to run the test suite, but never to use the plugin.
 
+Running a code drill's tests (Ctrl+R in the editor, or `t`) needs `python3`
+and `bubblewrap` (`bwrap`). Without bwrap the tests refuse to run; everything
+else works.
+
+### Running a drill's tests
+
+`bin/omengram-run` runs what you typed, with the card's tests, inside
+bubblewrap, and nowhere else: if bwrap is missing or cannot start, it says so
+and runs nothing. Inside, the code sees a read-only `/usr`, an empty `/tmp`,
+no network, none of your files, and no environment, and it has no
+capabilities. It is stopped after 8 seconds (6 of CPU), and is limited to 1 GiB
+of memory, 1 MiB per file, 64 open files and 64 processes, so an endless loop
+or a fork bomb ends as "stopped". Moving to another card stops a run that is
+still going.
+
+A case passes when `repr(expected) == repr(actual)`, as in GleamDrill. The
+results are for you to look at; they never grade the card.
+
 ### What it writes
 
 Worth knowing before you point this at your notes.
@@ -619,6 +637,21 @@ yours, under Anki's own Python:
 
 The sync tests use a fake AnkiWeb, a fake login, and a fake Anki window for
 the add-on, so they need no network and no account.
+
+Drills have their own tests: the diff and editor helpers under node, the
+GleamDrill importer against a made-up checkout, and the sandbox, with runs
+that are meant to blow up (hence `prlimit`, which keeps them from leaving core
+dumps):
+
+```bash
+node tests/drill.test.mjs
+python3 tests/test_import_gleamdrill.py
+prlimit --core=1:1 -- python3 tests/test_runner.py
+tests/qml/run.sh drill-keys
+```
+
+The last one types into a drill with real key presses in an off-screen
+Quickshell; it needs a Wayland session to start in, so it is local only.
 
 ## Layout
 

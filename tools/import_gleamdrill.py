@@ -303,12 +303,49 @@ def write(path, doc):
     os.replace(tmp, path)
 
 
+def verify(decks, jobs=4):
+    """Run every solution and alternate against its card's tests, in the same
+    sandbox omengram uses (bridge/run.py). Returns the failures as text."""
+    from concurrent.futures import ThreadPoolExecutor
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bridge"))
+    import run as runner
+
+    work = []
+    for _, doc in decks:
+        for c in doc["cards"]:
+            if not c.get("harness"):
+                continue
+            work.append((c["id"], "solution", c["answer"], c["harness"]))
+            for alt in c.get("alternates", []):
+                work.append((c["id"], alt["label"], alt["answer"], c["harness"]))
+
+    def one(job):
+        cid, label, code, harness = job
+        r = runner.run({"lang": "python", "solution": code, "harness": harness})
+        if r["status"] == "unavailable":
+            return "unavailable: " + r["message"]
+        if r["status"] != "ran":
+            return f"{cid} ({label}): {r['status']} {r.get('message', '')}".rstrip()
+        bad = [c["label"] for c in r["cases"] if not c["pass"]]
+        if not r["cases"]:
+            return f"{cid} ({label}): no cases ran"
+        return f"{cid} ({label}): failed {', '.join(bad)}" if bad else None
+
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        results = list(pool.map(one, work))
+    if any(r and r.startswith("unavailable") for r in results):
+        return len(work), [next(r for r in results if r and r.startswith("unavailable"))]
+    return len(work), [r for r in results if r]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("gleamdrill", help="a GleamDrill checkout")
     ap.add_argument("--lang", default="python", choices=sorted(LANGS))
     ap.add_argument("--out", help="where the decks go (default: ~/.local/share/omengram/Drills/<lang>)")
     ap.add_argument("--dry-run", action="store_true", help="say what would be written, write nothing")
+    ap.add_argument("--verify", action="store_true",
+                    help="first run every solution against its tests in the sandbox; write nothing if one fails")
     a = ap.parse_args(argv)
 
     out = a.out or os.path.join(os.path.expanduser("~"), ".local", "share", "omengram", "Drills", a.lang)
@@ -318,6 +355,15 @@ def main(argv=None):
     if refused:
         print("not overwriting decks this did not write: " + ", ".join(refused), file=sys.stderr)
         return 1
+
+    if a.verify:
+        ran, failures = verify(decks)
+        for f in failures:
+            print("  " + f, file=sys.stderr)
+        if failures:
+            print(f"verify: {len(failures)} of {ran} runs failed; nothing written", file=sys.stderr)
+            return 1
+        print(f"verify: all {ran} solutions pass their tests")
 
     total = sum(len(d["cards"]) for _, d in decks)
     lines = sum(1 for _, d in decks for c in d["cards"] if c.get("patterns"))

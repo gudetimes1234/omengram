@@ -53,7 +53,11 @@ FILES = {
         "            return True  # @3\n"
         "    return False  # @4\n"),
     "drills/python/solutions/nc01_has_repeat__brute.py": "def hasRepeat(nums):\n    return False\n",
-    "drills/python/harnesses/nc01_has_repeat.py": "__case__('a', True, hasRepeat([1, 1]))\n",
+    "drills/python/harnesses/nc01_has_repeat.py": (
+        "__results__ = []\n"
+        "def __case__(label, expected, actual):\n"
+        "    __results__.append([label, repr(expected), repr(actual)])\n"
+        "__case__('hasRepeat([1, 1])', True, hasRepeat([1, 1]))\n"),
     "drills/notes/nc01_has_repeat.txt": "@kind Hash Set\n@big-o O(n) time\n@order 1\n@pattern hash-set\nThe signal is a repeat.\n",
     "drills/notes/nc01_has_repeat__sorting.txt": "@kind Sorting\n@big-o O(n log n)\n@order 2\n@pattern sort-scan\nNeighbours.\n",
     "drills/notes/nc01_has_repeat__brute.txt": "@kind Brute force\n@order 3\nSlow.\n",
@@ -150,7 +154,7 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(c["complexity"], "O(n) time")
         self.assertEqual(c["tags"], ["neetcode", "easy", "arrays-hashing"])
         self.assertEqual(c["nudge"], "Ask the elements before.")
-        self.assertIn("hasRepeat([1, 1])", c["harness"])
+        self.assertIn("hasRepeat([1, 1]))", c["harness"])
         self.assertEqual([a["label"] for a in c["alternates"]], ["Sorting", "Brute force"])
         self.assertNotIn("# @", c["alternates"][0]["answer"])
 
@@ -197,6 +201,21 @@ class ImportTest(unittest.TestCase):
     def test_dry_run_writes_nothing(self):
         r = self.run_tool("--dry-run")
         self.assertEqual(r.returncode, 0)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_verify_runs_every_solution_and_writes_nothing_on_a_failure(self):
+        sys.path.insert(0, os.path.join(HERE, "..", "bridge"))
+        import run as runner
+        probe = runner.run({"solution": "def f(): pass", "harness": "__results__ = []"})
+        if probe["status"] == "unavailable":
+            self.skipTest("bwrap cannot run its sandbox here")
+        r = self.run_tool("--verify")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        # The brute force variant returns False for everything; the solution
+        # and the sorting variant pass.
+        self.assertIn("gd:python:nc01_has_repeat (Brute force): failed hasRepeat([1, 1])", r.stderr)
+        self.assertNotIn("Sorting", r.stderr)
+        self.assertIn("1 of 3 runs failed", r.stderr)
         self.assertFalse(os.path.exists(self.out))
 
     def test_a_big_group_is_split_under_the_cap(self):

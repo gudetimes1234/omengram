@@ -267,6 +267,14 @@ group("drill cards in a deck")
   t("the deck's cards keep their drill", G.assignDeck([coded], "d")[0].drill === coded.drill)
 }
 
+group("a drill's kind in the log")
+{
+  const [card] = G.parseDeck(JSON.stringify({ cards: [{ front: "a", back: "", kind: "code", answer: "x = 1" }] })).cards
+  const rec = G.logRecord({ card, now: 1000, grade: "good", mode: "free", tests: { pass: 2, total: 3 } })
+  t("logged as a code drill", rec.kind === "code")
+  t("with its test results", rec.tests.pass === 2 && rec.tests.total === 3)
+}
+
 group("tag filtering")
 {
   const deck = G.parseDeck(JSON.stringify([

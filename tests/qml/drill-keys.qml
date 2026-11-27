@@ -76,6 +76,14 @@ ShellRoot {
       function() {
         check("enter indents like the line above, one more after a colon", rev.typed.indexOf("\n    seen = set()\n    for v in values:\n        if v") >= 0, rev.typed)
         check("shift+tab outdents", rev.typed.indexOf("\n    return False") >= 0, rev.typed)
+        check("this drill has tests to run", rev.canRun, rev.currentDrill)
+        w.key(Qt.Key_R, Qt.ControlModifier)
+        return function() { return rev.runResult !== null && !rev.runningTests } },
+      function() {
+        var r = rev.runResult
+        check("ctrl+r runs the tests in the sandbox", r && r.status === "ran" && r.cases.length === 3
+              && r.cases.every(function(c) { return c.pass }), r)
+        check("running does not reveal, and the editor keeps the keys", !rev.revealed && rev.typing, [rev.revealed, rev.typing])
         w.key(Qt.Key_Escape)
         return function() { return !rev.typing } },
       function() {
@@ -94,10 +102,13 @@ ShellRoot {
         w.type("3")
         return function() { return w.graded === 1 } },
       function() {
-        check("3 grades once the answer is checked", w.graded === 1 && rev.reviewLog.answers.length === 1 && rev.reviewLog.answers[0].mode === "free", rev.reviewLog.answers)
+        var rec = rev.reviewLog.answers[0]
+        check("3 grades once the answer is checked", w.graded === 1 && rev.reviewLog.answers.length === 1 && rec.mode === "free", rev.reviewLog.answers)
+        check("the log has the drill's kind and its test results", rec.kind === "code" && rec.tests && rec.tests.pass === 3 && rec.tests.total === 3, rec)
         return function() { return rev.typing } },
       function() {
-        check("the next drill opens in the editor, empty", rev.typing && rev.typed === "" && !rev.checkResult, [rev.typing, rev.typed])
+        check("the next drill opens in the editor, empty", rev.typing && rev.typed === "" && !rev.checkResult && !rev.runResult, [rev.typing, rev.typed])
+        check("a typed card has no tests to run", !rev.canRun, rev.canRun)
         check("a typed card is typed too", rev.currentDrill && rev.currentDrill.kind === "type", rev.currentDrill)
         w.key(Qt.Key_Escape)
         return function() { return !rev.typing } },
