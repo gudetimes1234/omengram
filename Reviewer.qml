@@ -4,6 +4,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Anki.js" as Anki
+import "Drill.js" as Drill
 
 // The study session: owns the deck, the scheduling progress, and the queue,
 // and knows nothing about what is hosting it. The panel mounts one of these
@@ -145,8 +146,25 @@ Item {
   property bool revealed: false
 
   // How the card on screen is being answered, for the log: "card" for a plain
-  // card, "recall", "free" or "line" for a drill.
-  readonly property string answerMode: root.currentDrill ? "recall" : "card"
+  // card; for a drill, "free" once typed and checked, "recall" when revealed
+  // without typing.
+  readonly property string answerMode: !root.currentDrill ? "card"
+      : root.checkResult ? "free" : "recall"
+
+  // Typing an answer, which only a surface with room for an editor offers:
+  // the overlay. The bar panel shows drills as recall.
+  property bool interactive: false
+  readonly property bool canType: root.interactive && !!root.currentDrill
+      && root.phase === "reviewing"
+  // What has been typed for the card on screen, and how it compared once
+  // checked (Drill.diff). Both cleared when the card changes.
+  readonly property string typed: editor.text
+  property var checkResult: null
+  readonly property bool typing: editor.editing
+
+  // The editor has given the keys back, and the surface's own shortcuts should
+  // have them again.
+  signal releaseKeys()
 
   // Answers taken back, newest last. In memory and per sitting: undo is for
   // the grade you just fumbled, not a history you carry between sessions, and
@@ -311,7 +329,12 @@ Item {
 
   // Every card starts at its top, and a reveal on a long one goes to where the
   // answer begins rather than leaving it below the fold.
-  onCurrentIdChanged: { faceView.contentY = 0; root.shownAt = Date.now() }
+  onCurrentIdChanged: {
+    faceView.contentY = 0
+    root.shownAt = Date.now()
+    root.resetDrill()
+    if (root.active) Qt.callLater(root.startTyping)
+  }
   onRevealedChanged: Qt.callLater(function() {
     faceView.contentY = root.revealed && root.faceScrolls
         ? Math.max(0, Math.min(rule.y, faceView.contentHeight - faceView.height)) : 0
@@ -337,10 +360,40 @@ Item {
 
     root.queue = queue
     root.revealed = false
+    root.resetDrill()
+  }
+
+  function resetDrill() {
+    editor.clear()
+    root.checkResult = null
+  }
+
+  // Into the editor, for a drill not yet answered.
+  function startTyping() {
+    if (!root.canType || root.revealed) return
+    editor.focusEditor()
+  }
+
+  function stopTyping() {
+    root.releaseKeys()
+  }
+
+  // Compare what was typed with the answer and show both. Nothing typed is a
+  // plain reveal: answering from memory.
+  function checkTyped() {
+    if (root.phase !== "reviewing" || root.revealed) return
+    if (root.currentDrill && root.typed.trim() !== "") {
+      var code = root.currentDrill.kind === "code"
+      root.checkResult = Drill.diff(Anki.drillAnswer(root.current), root.typed, { indent: code })
+    }
+    root.revealed = true
+    root.releaseKeys()
   }
 
   function reveal() {
-    if (root.phase === "reviewing") root.revealed = true
+    if (root.phase !== "reviewing") return
+    if (root.currentDrill && root.typed.trim() !== "") root.checkTyped()
+    else root.revealed = true
   }
 
   // Space and Enter mean "show me the answer", then "I knew it" — the same two
@@ -900,6 +953,22 @@ Item {
             font.pixelSize: root.questionFontSize
           }
 
+          // Typing the answer, before it is shown.
+          DrillEditor {
+            id: editor
+            width: parent.width
+            visible: root.canType && !root.revealed
+            foreground: root.foreground
+            accent: root.accent
+            fontSize: Math.round(root.answerFontSize * 0.8)
+            placeholder: !root.currentDrill ? ""
+                : root.currentDrill.kind === "code"
+                ? "type the " + root.currentDrill.lang + " solution  ·  ctrl+enter to check"
+                : "type the answer  ·  ctrl+enter to check"
+            onSubmitted: root.checkTyped()
+            onEscaped: root.stopTyping()
+          }
+
           // The separator only appears with the answer, so the face of an
           // unrevealed card is the question and nothing else.
           Rectangle {
@@ -908,6 +977,16 @@ Item {
             height: Math.max(1, Style.space(1))
             visible: root.revealed
             color: Util.alpha(root.foreground, 0.15)
+          }
+
+          DiffView {
+            width: parent.width
+            visible: root.revealed && root.checkResult !== null
+            result: root.checkResult
+            foreground: root.foreground
+            accent: root.accent
+            urgent: root.urgent
+            fontSize: Math.round(root.answerFontSize * 0.8)
           }
 
           // A code drill's answer is its code. Its back, if any, is the notes
@@ -938,7 +1017,7 @@ Item {
           Text {
             textFormat: Text.PlainText
             width: parent.width
-            visible: !root.revealed
+            visible: !root.revealed && !editor.visible
             horizontalAlignment: Text.AlignHCenter
             text: "space to reveal"
             color: root.foreground

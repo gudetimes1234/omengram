@@ -35,7 +35,7 @@ const group = (name) => console.log("\n" + name)
 // `Text` is the renderer. `PanelSectionHeader` is a bare Text subclass from
 // qs.Ui — none of the shared Ui components set textFormat, so anything built
 // on them inherits AutoText and has to be corrected where it is instantiated.
-const OPEN = /(?<![A-Za-z_.])(Text|PanelSectionHeader)\s*\{/g
+const OPEN = /(?<![A-Za-z_.])(Text|TextEdit|PanelSectionHeader)\s*\{/g
 
 function declarations(src) {
   const out = []
@@ -61,7 +61,7 @@ group("every text sink forces plain text")
     const src = readFileSync(join(root, file), "utf8")
     for (const d of declarations(src)) {
       checked++
-      if (!/textFormat:\s*Text\.PlainText/.test(d.body))
+      if (!/textFormat:\s*(Text|TextEdit)\.PlainText/.test(d.body))
         unhardened.push(`${file}:${d.line} ${d.kind}`)
     }
   }
@@ -76,7 +76,7 @@ group("no sink opts back into interpreting markup")
   const offenders = []
   for (const file of qmlFiles) {
     const src = readFileSync(join(root, file), "utf8")
-    if (/textFormat:\s*Text\.(RichText|AutoText|StyledText|MarkdownText)/.test(src)) offenders.push(file)
+    if (/textFormat:\s*(Text|TextEdit)\.(RichText|AutoText|StyledText|MarkdownText)/.test(src)) offenders.push(file)
   }
   t("no RichText, AutoText, StyledText or MarkdownText anywhere", offenders.length === 0)
 }

@@ -32,6 +32,9 @@ jobs:
       - name: FSRS conformance tests
         run: node tests/fsrs.test.mjs
 
+      - name: Drill tests
+        run: node tests/drill.test.mjs
+
       # Card text is imported content and Qt's Text defaults to AutoText, which
       # interprets markup. These assert every sink forces plain text, so a Text
       # added later cannot quietly reintroduce it.

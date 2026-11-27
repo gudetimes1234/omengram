@@ -153,7 +153,7 @@ Item {
 
   function showReview() {
     root.mode = "review"
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    Qt.callLater(function() { keyCatcher.forceActiveFocus(); reviewer.startTyping() })
   }
 
   function showAdd() {
@@ -263,6 +263,7 @@ Item {
           else if (k === "3") reviewer.answer("good")
           else if (k === "4") reviewer.answer("easy")
           else if (k === "u") reviewer.undo()
+          else if (k === "i") reviewer.startTyping()
           else if (k === "r") reviewer.reload()
           else if (k === "y") ankiSync.syncNow()
           else return
@@ -393,6 +394,9 @@ Item {
             ankiEnabled: root.ankiEnabled
             ankiProfile: root.ankiProfile
             active: root.opened
+            // Room for an editor: drills are typed here.
+            interactive: root.mode === "review"
+            onReleaseKeys: keyCatcher.forceActiveFocus()
             foreground: root.foreground
             accent: Color.accent
             urgent: Color.urgent
@@ -450,7 +454,10 @@ Item {
             // for those few seconds that is the more useful thing to read.
             text: reviewer.leechNotice
                 ? reviewer.leechNotice + "  ·  s stats to restore"
-                : (reviewer.revealed ? "1-4 grade  ·  space good" : "space reveal")
+                : reviewer.typing
+                ? "ctrl+enter check  ·  tab indent  ·  esc leave the editor"
+                : (reviewer.revealed ? "1-4 grade  ·  space good"
+                   : reviewer.canType ? "i type  ·  space reveal" : "space reveal")
                   + (reviewer.canUndo ? "  ·  u undo" : "")
                   + "  ·  s stats  ·  a add"
                   + (ankiSync.inUse ? "  ·  y sync" : "")
