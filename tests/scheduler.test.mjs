@@ -37,6 +37,7 @@ const EXPORTS = [
   "RETENTION", "saneRetention", "migrate", "memoryLine",
   "LOG_RECORD_LIMIT", "LOG_READ_LIMIT", "APPEND_SH", "LOGTAIL_SH", "logName", "logNames", "logRecord",
   "undoRecord", "serializeRecord", "parseLog", "logRetention", "retentionText",
+  "parseDrill", "drillAnswer",
   "LIST_SH", "deckMatches", "pathMatches", "normalizeDecks", "scopeLabel", "resolveDeckDir",
   "parseListing", "buildDeckTree", "nodeState", "toggleDeck", "toggleTag", "assignDeck",
   "mergeDecks", "deckRows", "tagRows", "normalizeLimits", "withLimit", "stepLimit",
@@ -225,6 +226,45 @@ group("deck parsing")
     G.parseDeck('[{"front":"a","back":"1"}]').cards[0].id !==
     G.parseDeck('[{"front":"A","back":"1"}]').cards[0].id)
   t("an explicit id wins", G.parseDeck('[{"id":"mine","front":"a","back":"1"}]').cards[0].id === "mine")
+}
+
+group("drill cards in a deck")
+{
+  const deck = G.parseDeck(JSON.stringify({ source: "gleamdrill-import", cards: [
+    { front: "plain", back: "card" },
+    { front: "typed", back: "Paris", kind: "type" },
+    { id: "gd:py:x", front: "code it", back: "", kind: "code", lang: "python", answer: "def f():\n    return 1   \n",
+      harness: "__case__('a', 1, f())", complexity: "O(1)", nudge: "think",
+      alternates: [{ label: "Other", answer: "def f(): return 1" }, { label: "empty", answer: "" }],
+      patterns: [{ slug: "p", name: "P", steps: ["s"], notes: [{ id: 1, step: 0, pseudo: "  return one", hint: "h", why: "w" }, { id: 0 }],
+                   lines: [{ given: "def f():" }, { text: "  return 1 ", indent: 4, notes: [1, "x"] }, { text: "" }, 7] }] },
+    { front: "code without code", back: "notes", kind: "code" },
+    { front: "only patterns", back: "b", patterns: [{ slug: "q", lines: [{ text: "x = 1", indent: 0, notes: [1] }] }] },
+    { front: "a pattern with nothing to type", back: "b", patterns: [{ slug: "q", lines: [{ given: "x" }] }] },
+    { front: "nonsense kind", back: "b", kind: "essay" },
+    { front: "no back, no answer", back: "", kind: "code" },
+  ] }))
+  const [plain, typed, coded, noCode, onlyPatterns, untypable, nonsense] = deck.cards
+  t("a deck with a source marker still parses", !deck.error && deck.cards.length === 7)
+  t("a plain card has no drill", plain.drill === null)
+  t("a typed card", typed.drill.kind === "type" && G.drillAnswer(typed) === "Paris")
+  t("a code card keeps its code, indentation and all, trimmed at the end",
+    coded.drill.kind === "code" && coded.drill.answer === "def f():\n    return 1" && G.drillAnswer(coded) === coded.drill.answer)
+  t("a code card may leave its back for notes", coded.back === "" && coded.id === "gd:py:x")
+  t("its language, harness, complexity and nudge",
+    coded.drill.lang === "python" && coded.drill.harness.startsWith("__case__") && coded.drill.complexity === "O(1)" && coded.drill.nudge === "think")
+  t("alternates without code are dropped", coded.drill.alternates.length === 1 && coded.drill.alternates[0].label === "Other")
+  const p = coded.drill.patterns[0]
+  t("a pattern's notes, the bad one dropped", p.notes.length === 1 && p.notes[0].pseudo === "  return one")
+  t("its lines: given kept as is, typed trimmed with their indent",
+    p.lines.length === 2 && p.lines[0].given === "def f():" && p.lines[1].text === "return 1" && p.lines[1].indent === 4
+    && JSON.stringify(p.lines[1].notes) === "[1]")
+  t("a code card with no code is a plain card", noCode.drill === null)
+  t("patterns alone make a drill", onlyPatterns.drill && onlyPatterns.drill.patterns.length === 1 && onlyPatterns.drill.kind === "type")
+  t("a pattern with nothing to type is not one", untypable.drill === null)
+  t("an unknown kind is a plain card", nonsense.drill === null)
+  t("a card with neither back nor answer is dropped", !deck.cards.some((c) => c.front === "no back, no answer"))
+  t("the deck's cards keep their drill", G.assignDeck([coded], "d")[0].drill === coded.drill)
 }
 
 group("tag filtering")

@@ -370,7 +370,9 @@ function parseDeck(raw) {
 
     var front = text(entry.front)
     var back = text(entry.back)
-    if (!front || !back) continue
+    var drill = parseDrill(entry)
+    // A code card's answer is its code, so its back may be left for notes.
+    if (!front || (!back && !(drill && drill.answer))) continue
 
     var id = text(entry.id) || hashId(front)
     if (seen[id]) continue
@@ -380,11 +382,92 @@ function parseDeck(raw) {
       id: id,
       front: front,
       back: back,
-      tags: Array.isArray(entry.tags) ? entry.tags.map(text).filter(Boolean) : []
+      tags: Array.isArray(entry.tags) ? entry.tags.map(text).filter(Boolean) : [],
+      drill: drill
     })
   }
 
   return { cards: cards, error: "" }
+}
+
+// ------------------------------------------------------------------ drills
+//
+// A card can be a drill: typed rather than only recalled. `kind` is "type" (a
+// text answer, compared with the back) or "code" (code in `lang`, compared
+// with `answer`, and run against `harness` when it has one). A card with
+// `patterns` can also be learnt line by line (Line Drill), whatever its kind.
+// Anything else is a plain card, and so is a card whose drill fields make no
+// sense: the deck is hand-written, and one bad field should not lose a card.
+
+var DRILL_KINDS = ["type", "code"]
+// Code is typed with spaces; the deck says how far a line is indented.
+var MAX_INDENT = 64
+
+// Trailing whitespace only: indentation is the code's own.
+function code(value) {
+  return value === undefined || value === null ? "" : String(value).replace(/\s+$/, "")
+}
+
+function ints(list) {
+  return (Array.isArray(list) ? list : []).map(Number).filter(function(n) {
+    return isFinite(n) && n === Math.floor(n)
+  })
+}
+
+function parsePattern(p) {
+  if (!p || typeof p !== "object") return null
+  var slug = text(p.slug)
+  var notes = (Array.isArray(p.notes) ? p.notes : []).map(function(n) {
+    return n && typeof n === "object" ? {
+      id: Math.round(num(n.id, 0)), step: Math.max(0, Math.round(num(n.step, 0))),
+      pseudo: code(n.pseudo), hint: text(n.hint), why: text(n.why)
+    } : null
+  }).filter(function(n) { return n && n.id > 0 })
+  var lines = (Array.isArray(p.lines) ? p.lines : []).map(function(l) {
+    if (!l || typeof l !== "object") return null
+    if (l.given !== undefined) return { given: code(l.given) }
+    var t = text(l.text)
+    if (!t) return null
+    return { text: t, indent: Math.max(0, Math.min(MAX_INDENT, Math.round(num(l.indent, 0)))),
+             notes: ints(l.notes) }
+  }).filter(Boolean)
+  // A pattern with nothing to type is not a drill.
+  if (!slug || !lines.some(function(l) { return l.text })) return null
+  return {
+    slug: slug, name: text(p.name) || slug, complexity: text(p.complexity), nudge: text(p.nudge),
+    steps: (Array.isArray(p.steps) ? p.steps : []).map(text),
+    notes: notes, lines: lines
+  }
+}
+
+// The drill part of a deck entry, or null for a plain card.
+function parseDrill(entry) {
+  var kind = text(entry.kind)
+  var patterns = (Array.isArray(entry.patterns) ? entry.patterns : []).map(parsePattern).filter(Boolean)
+  if (DRILL_KINDS.indexOf(kind) === -1 && !patterns.length) return null
+  if (DRILL_KINDS.indexOf(kind) === -1) kind = "type"
+  var answer = kind === "code" ? code(entry.answer) : ""
+  if (kind === "code" && !answer && !patterns.length) return null
+  return {
+    kind: kind,
+    lang: text(entry.lang) || (kind === "code" ? "text" : ""),
+    answer: answer,
+    alternates: (Array.isArray(entry.alternates) ? entry.alternates : []).map(function(a) {
+      return a && typeof a === "object" && code(a.answer)
+          ? { label: text(a.label), answer: code(a.answer), complexity: text(a.complexity), note: text(a.note) }
+          : null
+    }).filter(Boolean),
+    harness: kind === "code" ? code(entry.harness) : "",
+    complexity: text(entry.complexity),
+    nudge: text(entry.nudge),
+    patterns: patterns
+  }
+}
+
+// What a drill is compared against: its code, or for a typed card its back.
+function drillAnswer(card) {
+  if (!card || !card.drill) return ""
+  return card.drill.kind === "code" ? card.drill.answer : card.back
 }
 
 // A setting that may be one value or several, as a plain array. QML hands a list
@@ -709,7 +792,7 @@ function toggleTag(rows, selected, id) {
 // Each card remembers the deck it came from, for limits and for the composer.
 function assignDeck(cards, id) {
   return (cards || []).map(function(c) {
-    return { id: c.id, front: c.front, back: c.back, tags: c.tags, deck: id }
+    return { id: c.id, front: c.front, back: c.back, tags: c.tags, drill: c.drill || null, deck: id }
   })
 }
 

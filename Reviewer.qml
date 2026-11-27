@@ -146,7 +146,7 @@ Item {
 
   // How the card on screen is being answered, for the log: "card" for a plain
   // card, "recall", "free" or "line" for a drill.
-  property string answerMode: "card"
+  readonly property string answerMode: root.currentDrill ? "recall" : "card"
 
   // Answers taken back, newest last. In memory and per sitting: undo is for
   // the grade you just fumbled, not a history you carry between sessions, and
@@ -181,6 +181,9 @@ Item {
   readonly property var current: root.source === "anki" ? ankiSource.card
       : root.source === "json" ? root.jsonCurrent : null
   readonly property string currentId: root.current ? root.current.id : ""
+  // A drill card from the library. Anki's cards are never drills.
+  readonly property var currentDrill: root.source === "json" && root.current ? root.current.drill : null
+  readonly property bool isCode: !!root.currentDrill && root.currentDrill.kind === "code"
   readonly property var currentState: root.source === "anki"
       ? Anki.ankiState(ankiSource.card) : root.jsonState
 
@@ -907,16 +910,29 @@ Item {
             color: Util.alpha(root.foreground, 0.15)
           }
 
+          // A code drill's answer is its code. Its back, if any, is the notes
+          // that go with it, and reads below.
+          CodeView {
+            width: parent.width
+            visible: root.revealed && root.isCode
+            code: root.isCode ? root.current.drill.answer : ""
+            label: root.isCode ? [root.current.drill.lang, root.current.drill.complexity]
+                .filter(Boolean).join("  ·  ") : ""
+            foreground: root.foreground
+            fontSize: Math.round(root.answerFontSize * 0.8)
+          }
+
           Text {
             textFormat: Text.PlainText
             width: parent.width
-            visible: root.revealed
-            horizontalAlignment: text.indexOf("\n") === -1 ? Text.AlignHCenter : Text.AlignLeft
+            visible: root.revealed && text !== ""
+            horizontalAlignment: text.indexOf("\n") === -1 && !root.isCode ? Text.AlignHCenter : Text.AlignLeft
             wrapMode: Text.Wrap
             text: root.current ? root.current.back : ""
-            color: root.accent
+            color: root.isCode ? root.foreground : root.accent
+            opacity: root.isCode ? 0.8 : 1
             font.family: root.fontFamily
-            font.pixelSize: root.answerFontSize
+            font.pixelSize: root.isCode ? Style.font.body : root.answerFontSize
           }
 
           Text {
