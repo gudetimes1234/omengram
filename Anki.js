@@ -1230,7 +1230,9 @@ function counts(cards, progress, now, newPerDay, reviewsPerDay, caps) {
 // says something quite different from accuracy on ones you met yesterday.
 var MATURE_INTERVAL = 21 * DAY
 
-function deckStats(cards, progress, now, newPerDay, reviewsPerDay) {
+// `log`, the review log's answers (parseLog), makes retention a real figure;
+// without it, it is the lifetime approximation from lapses over reps.
+function deckStats(cards, progress, now, newPerDay, reviewsPerDay, log) {
   var list = cards || []
   var out = {
     total: list.length,
@@ -1293,10 +1295,21 @@ function deckStats(cards, progress, now, newPerDay, reviewsPerDay) {
   out.ease = 0
   out.difficulty = out.difficultyCount ? out.difficultySum / out.difficultyCount : 0
 
-  // Rough retention: how often an answered card has *not* had to be relearned.
-  // With no review log this is the honest approximation available — it is a
-  // lifetime figure per card, not a rolling window, so it moves slowly.
-  out.retention = out.reps > 0 ? Math.max(0, 1 - (out.lapses / out.reps)) : 0
+  if (log) {
+    // From the log: reviews passed over the last month, for these cards.
+    var ids = {}
+    for (var k = 0; k < list.length; k++) ids[list[k].id] = true
+    var r = logRetention(log, now, ids)
+    out.fromLog = true
+    out.retention = r.retention
+    out.retentionReviews = r.reviews
+    out.retentionDays = r.days
+    out.retentionByMode = r.byMode
+  } else {
+    // Rough retention: how often an answered card has *not* had to be
+    // relearned. A lifetime figure per card, not a rolling window.
+    out.retention = out.reps > 0 ? Math.max(0, 1 - (out.lapses / out.reps)) : 0
+  }
 
   var left = remainingToday(progress, now, newPerDay, reviewsPerDay)
   out.freshLeft = left.fresh
@@ -1496,6 +1509,202 @@ var WRITE_SH = [
   'mv -f "$t" "/proc/self/fd/9/$name" || { rm -f "$t"; exit 74; }'
 ].join("\n")
 
+// ------------------------------------------------------------- review log
+//
+// Every answer to a library card is one line in a monthly JSONL file under
+// the state directory. The log is only ever appended to: an undo is a record
+// of its own, naming the answer it takes back. It never goes through the
+// progress file's read-merge-write, so it can grow without the save path
+// growing with it.
+
+// The most one record may take. A record is a few hundred bytes; the cap is
+// what lets a single write carry it whole.
+var LOG_RECORD_LIMIT = 65536
+// How much of each month's file a read takes, from its end.
+var LOG_READ_LIMIT = 1048576
+var LOG_DAYS = 30
+
+// Appending. The same walk and the same pin as a write, but the record is
+// added to the end of the file instead of replacing it. One record arrives on
+// stdin and leaves in one write(2) on a descriptor opened O_APPEND, which is
+// what keeps two surfaces appending at once from interleaving their lines.
+//
+// $1 = HOME, $2 = path relative to HOME.
+var APPEND_SH = [
+  WALK_SH,
+  'd="$base"',
+  'IFS="/"',
+  'for c in $dir; do',
+  '  [ -n "$c" ] || continue',
+  '  d="$d/$c"',
+  '  [ -L "$d" ] && exit 65',
+  '  if [ -e "$d" ]; then',
+  '    [ -d "$d" ] || exit 66',
+  '    [ -O "$d" ] || exit 67',
+  '  else',
+  '    mkdir -m 700 "$d" || exit 68',
+  '  fi',
+  'done',
+  'unset IFS',
+  PIN_SH,
+  'f="/proc/self/fd/9/$name"',
+  '[ -L "$f" ] && exit 65',
+  'if [ -e "$f" ]; then',
+  '  [ -f "$f" ] || exit 66',
+  '  [ -O "$f" ] || exit 67',
+  'fi',
+  'umask 077',
+  'exec dd of="$f" oflag=append,nofollow conv=notrunc iflag=fullblock bs=' + LOG_RECORD_LIMIT
+    + ' count=1 status=none'
+].join("\n")
+
+// Reading the log: the end of each named file in one directory, each after a
+// header line saying how much of its start was skipped, so the parser can
+// drop the partial line a cut leaves behind. Missing files are skipped.
+//
+// $1 = HOME, $2 = path of the first file relative to HOME, then more names in
+// the same directory.
+var LOGTAIL_SH = [
+  WALK_SH,
+  'd="$base"',
+  'IFS="/"',
+  'for c in $dir; do',
+  '  [ -n "$c" ] || continue',
+  '  d="$d/$c"',
+  '  [ -L "$d" ] && exit 65',
+  '  [ -e "$d" ] || exit 0',
+  '  [ -d "$d" ] || exit 65',
+  '  [ -O "$d" ] || exit 65',
+  'done',
+  'unset IFS',
+  PIN_SH,
+  'shift 2',
+  'for n in "$name" "$@"; do',
+  '  case "$n" in ""|*/*|.*) continue;; esac',
+  '  f="/proc/self/fd/9/$n"',
+  '  [ -L "$f" ] && continue',
+  '  [ -f "$f" ] || continue',
+  '  size=$(stat -c %s "$f") || continue',
+  '  skip=0',
+  '  [ "$size" -gt ' + LOG_READ_LIMIT + ' ] && skip=$((size - ' + LOG_READ_LIMIT + '))',
+  "  printf '#omengram-log %s %s\\n' \"$n\" \"$skip\"",
+  '  dd if="$f" iflag=nofollow,nonblock,skip_bytes,fullblock skip="$skip" bs=' + LOG_READ_LIMIT
+    + ' count=1 2>/dev/null',
+  '  echo',
+  'done'
+].join("\n")
+
+// This month's file, by the study day the answer belongs to.
+function logName(now) {
+  return "reviews-" + dayKey(now).slice(0, 7) + ".jsonl"
+}
+
+// The files a read takes: this month's and the one before, which between them
+// always cover the last thirty days.
+function logNames(now) {
+  var d = new Date((now - ROLLOVER_HOUR * HOUR) * 1000)
+  var prev = new Date(d.getFullYear(), d.getMonth() - 1, 15)
+  return [logName(now), "reviews-" + prev.getFullYear() + "-"
+      + (prev.getMonth() < 9 ? "0" : "") + (prev.getMonth() + 1) + ".jsonl"]
+}
+
+var LOG_MODES = ["card", "recall", "free", "line"]
+
+function round3(x) {
+  return Math.round(x * 1000) / 1000
+}
+
+// One answer, as the log keeps it. `o` carries the card, the states before and
+// after, the grade, the instant, and what the surface knows: how long the card
+// was up (ms), how it was answered (mode), whether the answer was looked at
+// before grading (revealed), and the test results if any were run.
+function logRecord(o) {
+  var card = o.card || {}
+  var before = normalizeState(o.before)
+  var after = o.after || {}
+  var now = num(o.now, 0)
+  var rec = {
+    v: 1,
+    rid: text(o.rid) || (Math.round(now * 1000) + "-" + Math.floor(num(o.salt, Math.random()) * 1e6)),
+    card: text(card.id),
+    deck: text(card.deck),
+    kind: text(card.kind) || "basic",
+    at: now,
+    rating: GRADES.indexOf(o.grade) + 1,
+    sb: before.phase,
+    // Days since the last answer, as FSRS counts them; -1 for a new card.
+    elapsed: before.lastReview ? Math.floor((now - before.lastReview) / DAY) : -1,
+    sched: round3(Math.max(0, num(after.due, now) - now) / DAY),
+    s: after.stability === null || after.stability === undefined ? null : round3(after.stability),
+    d: after.difficulty === null || after.difficulty === undefined ? null : round3(after.difficulty),
+    ms: Math.max(0, Math.round(num(o.ms, 0))),
+    mode: LOG_MODES.indexOf(o.mode) >= 0 ? o.mode : "card",
+    revealed: o.revealed === true,
+    recall: o.recall === true
+  }
+  if (o.tests && typeof o.tests === "object")
+    rec.tests = { pass: Math.max(0, Math.round(num(o.tests.pass, 0))),
+                  total: Math.max(0, Math.round(num(o.tests.total, 0))) }
+  return rec
+}
+
+function undoRecord(rid, now) {
+  return { v: 1, op: "undo", rid: text(rid), at: num(now, 0) }
+}
+
+// A record as a line. Anything that would not fit in one append is refused
+// here rather than cut mid-line by the writer.
+function serializeRecord(rec) {
+  var line = JSON.stringify(rec) + "\n"
+  return utf8Length(line) <= LOG_RECORD_LIMIT ? line : ""
+}
+
+// What LOGTAIL_SH printed, as a list of answers, oldest first. Undone answers
+// are left out; lines that do not parse, or are not records, are skipped.
+function parseLog(raw) {
+  var lines = String(raw || "").split("\n")
+  var answers = []
+  var undone = {}
+  var dropNext = false
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i]
+    var head = /^#omengram-log (\S+) (\d+)$/.exec(line)
+    if (head) { dropNext = Number(head[2]) > 0; continue }
+    if (dropNext) { dropNext = false; continue }    // cut off by the tail
+    if (!line.trim()) continue
+    var r
+    try { r = JSON.parse(line) } catch (e) { continue }
+    if (!r || typeof r !== "object" || r.v !== 1) continue
+    if (r.op === "undo") { if (r.rid) undone[r.rid] = true; continue }
+    if (!r.rid || !r.card || !(r.rating >= 1 && r.rating <= 4) || !isFinite(Number(r.at))) continue
+    answers.push(r)
+  }
+  answers = answers.filter(function(r) { return !undone[r.rid] })
+  answers.sort(function(a, b) { return a.at - b.at })
+  return answers
+}
+
+// The share of reviews passed over the last LOG_DAYS days: answers to cards
+// already in review, not graded Again. Learning steps are left out, as Anki
+// leaves them out of its true retention. `ids`, when given, limits it to
+// those cards.
+function logRetention(log, now, ids) {
+  var since = now - LOG_DAYS * DAY
+  var out = { reviews: 0, passed: 0, days: LOG_DAYS, byMode: {} }
+  var list = log || []
+  for (var i = 0; i < list.length; i++) {
+    var r = list[i]
+    if (r.at < since || r.sb !== "review") continue
+    if (ids && !ids[r.card]) continue
+    out.reviews++
+    var m = out.byMode[r.mode] || (out.byMode[r.mode] = { reviews: 0, passed: 0 })
+    m.reviews++
+    if (r.rating > 1) { out.passed++; m.passed++ }
+  }
+  out.retention = out.reviews ? out.passed / out.reviews : 0
+  return out
+}
+
 // Is `path` inside `home`, and where? Returns the path relative to home, or ""
 // when it is not contained — which the caller must treat as a refusal rather
 // than as a path to attempt. Doing this here rather than in shell keeps it
@@ -1636,6 +1845,14 @@ function memoryLine(stats) {
   return parts.join("  ·  ")
 }
 
+// Retention for the statistics line: "92% passed, last 30 days", or that
+// there is nothing to measure yet.
+function retentionText(stats) {
+  var st = stats || {}
+  if (st.retentionReviews === 0) return "no reviews in the last " + LOG_DAYS + " days"
+  return percent(st.retention) + " " + (st.retentionLabel || "never relearned")
+}
+
 // The statistics tabs for both sides. Retention means different things on
 // each: the library has no review log, so its figure is a lifetime one, while
 // Anki's is the share of reviews passed over the last month. Each is weighted
@@ -1652,10 +1869,14 @@ function mergeStats(json, anki) {
     out.forecast.push(num((j.forecast || [])[d], 0) + num((a.forecast || [])[d], 0))
   out.ease = out.easeCount ? out.easeSum / out.easeCount / 1000 : 0
   out.difficulty = out.difficultyCount ? out.difficultySum / out.difficultyCount : 0
-  var jw = hasJ ? num(j.reps, 0) : 0
+  var jw = hasJ ? num(j.fromLog ? j.retentionReviews : j.reps, 0) : 0
   var aw = hasA ? num(a.retentionReviews, 0) : 0
   out.retention = jw + aw > 0 ? (num(j.retention, 0) * jw + num(a.retention, 0) * aw) / (jw + aw) : 0
-  out.retentionLabel = aw && !jw ? "passed, last " + num(a.retentionDays, 30) + " days"
+  out.retentionReviews = jw + aw
+  // Both sides measured over the last month, or the one that was: the
+  // figure is the same kind of number and says so.
+  var monthly = (!jw || j.fromLog) && (jw || aw)
+  out.retentionLabel = monthly ? "passed, last " + num(aw ? a.retentionDays : j.retentionDays, LOG_DAYS) + " days"
       : jw && !aw ? "never relearned" : "retained"
   out.freshLeft = num(j.freshLeft, 0)
   out.dueLeft = j.dueLeft === undefined ? Infinity : j.dueLeft

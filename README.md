@@ -261,10 +261,10 @@ presentations rather than two of either.
 what falls due over the next seven days, and today's figures. Today leads with
 the one number and gives its parts underneath: `answered` is `reviews + new` by
 construction, so showing all three as peers was three numbers carrying two
-facts. Everything is derived from the cards themselves; the plugin keeps no
-review log, so *retention* is a lifetime figure per card (answers that never
-had to be relearned) rather than Anki's rolling window, and the view says so
-rather than letting the number be misread.
+facts. *Retention* comes from the review log: the share of reviews in the
+last 30 days not graded *Again*, counting cards already in review and not
+learning steps, the way Anki measures true retention. Beside it is the deck's
+average FSRS difficulty, and ease for Anki's cards.
 
 **Leeches** appear in both, but only once there are any — a deck without them
 says nothing about them, and in the panel the tab itself stays away. You get
@@ -483,6 +483,11 @@ Worth knowing before you point this at your notes.
 
 **`~/.local/state/omarchy/omengram.json`** — scheduling progress, written on
 every answer. Entirely the plugin's own file.
+
+**`~/.local/state/omarchy/omengram/reviews-YYYY-MM.jsonl`** — the review log,
+one line per answer to a library card: the card, the grade, the memory before
+and after, and how long it was on screen. Only ever appended to; an undo is a
+line of its own. Mode 600. Anki's answers are in Anki's own log, not here.
 
 **Your Anki collection**, when an Anki card is answered, undone or restored:
 the same changes Anki makes when you review there. The selected deck is put

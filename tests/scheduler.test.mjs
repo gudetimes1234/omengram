@@ -7,7 +7,7 @@
 // tested here, apart from the two file-I/O snippets, which are plain sh and
 // are run as such.
 
-import { execFileSync, spawnSync } from "node:child_process"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
          statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -35,6 +35,8 @@ const EXPORTS = [
   "READ_SH", "WRITE_SH", "relativeToHome", "READ_LIMIT", "hitReadLimit",
   "LEECH_THRESHOLD", "isLeechLapse", "leechConfig", "unsuspendAll",
   "RETENTION", "saneRetention", "migrate", "memoryLine",
+  "LOG_RECORD_LIMIT", "LOG_READ_LIMIT", "APPEND_SH", "LOGTAIL_SH", "logName", "logNames", "logRecord",
+  "undoRecord", "serializeRecord", "parseLog", "logRetention", "retentionText",
   "LIST_SH", "deckMatches", "pathMatches", "normalizeDecks", "scopeLabel", "resolveDeckDir",
   "parseListing", "buildDeckTree", "nodeState", "toggleDeck", "toggleTag", "assignDeck",
   "mergeDecks", "deckRows", "tagRows", "normalizeLimits", "withLimit", "stepLimit",
@@ -1065,6 +1067,150 @@ group("the three passing grades stay in order")
   t("hard ≤ good ≤ easy for every card", ordered)
 }
 
+
+// ------------------------------------------------------------- review log
+
+group("an answer as the log keeps it")
+{
+  const card = { id: "c1", deck: "drills/py", kind: "code" }
+  const before = G.normalizeState({ phase: "review", due: NOW, interval: 10 * DAY, ease: 2500, reps: 3 })
+  const after = G.grade(before, "good", NOW)
+  const r = G.logRecord({ card, before, after, grade: "good", now: NOW, ms: 4200.6, mode: "free",
+                          tests: { pass: 3, total: 4 }, salt: 0.5 })
+  t("versioned, with an id", r.v === 1 && /^\d+-\d+$/.test(r.rid))
+  t("names the card, its deck and kind", r.card === "c1" && r.deck === "drills/py" && r.kind === "code")
+  t("the grade is 1-4", r.rating === 3)
+  t("the phase before the answer", r.sb === "review")
+  t("days since the last answer", r.elapsed === 10)
+  t("days scheduled", r.sched === after.interval / DAY)
+  t("memory after, rounded", r.s === Math.round(after.stability * 1000) / 1000 && r.d > 0)
+  t("time on the card, whole ms", r.ms === 4201)
+  t("how it was answered", r.mode === "free" && r.revealed === false && r.recall === false)
+  t("the tests that ran", r.tests.pass === 3 && r.tests.total === 4)
+  t("a new card has no elapsed days", G.logRecord({ card, before: G.newState(), after, grade: "good", now: NOW }).elapsed === -1)
+  t("an unknown mode is a plain card", G.logRecord({ card, before, after, grade: "good", now: NOW, mode: "x" }).mode === "card")
+  t("a basic card says so", G.logRecord({ card: { id: "x" }, before, after, grade: "again", now: NOW }).kind === "basic")
+  const line = G.serializeRecord(r)
+  t("one line each", line.endsWith("\n") && line.indexOf("\n") === line.length - 1)
+  t("a record too big for one append is refused",
+    G.serializeRecord({ ...r, card: "x".repeat(G.LOG_RECORD_LIMIT) }) === "")
+}
+
+group("reading the log back")
+{
+  const rec = (rid, at, rating = 3, sb = "review", card = "c1", mode = "card") =>
+    JSON.stringify({ v: 1, rid, card, at, rating, sb, mode })
+  const raw = [
+    "#omengram-log reviews-2026-11.jsonl 0",
+    rec("b", NOW + 20), rec("a", NOW + 10),
+    "not json", JSON.stringify({ v: 2, rid: "z", card: "c", at: NOW, rating: 3 }),
+    JSON.stringify({ v: 1, rid: "q", card: "c", at: NOW, rating: 9 }),
+    JSON.stringify({ v: 1, op: "undo", rid: "b", at: NOW + 30 }),
+    "",
+    "#omengram-log reviews-2026-10.jsonl 512",
+    '{"v":1,"rid":"cut","card":"c1","at":1,"ra',
+    rec("c", NOW - 5),
+  ].join("\n")
+  const log = G.parseLog(raw)
+  t("answers come back oldest first", log.map((r) => r.rid).join() === "c,a")
+  t("an undone answer is left out", !log.some((r) => r.rid === "b"))
+  t("lines that are not v1 records are skipped", !log.some((r) => r.rid === "z" || r.rid === "q"))
+  t("the partial line a tail cut leaves is dropped", !log.some((r) => r.rid === "cut"))
+  t("nothing at all is no answers", G.parseLog("").length === 0 && G.parseLog(null).length === 0)
+
+  t("this month's file, by study day", G.logName(NOW) === "reviews-" + G.dayKey(NOW).slice(0, 7) + ".jsonl")
+  const jan = new Date(2026, 0, 10, 12).getTime() / 1000
+  t("a read takes this month and the last, across a year", G.logNames(jan).join() === "reviews-2026-01.jsonl,reviews-2025-12.jsonl")
+}
+
+group("retention from the log")
+{
+  const r = (rid, at, rating, sb = "review", card = "c1", mode = "card") => ({ v: 1, rid, card, at, rating, sb, mode })
+  const log = [
+    r("1", NOW - 40 * DAY, 1),           // too old
+    r("2", NOW - 10 * DAY, 3), r("3", NOW - 9 * DAY, 1), r("4", NOW - 8 * DAY, 4, "review", "c1", "free"),
+    r("5", NOW - DAY, 1, "learning"),    // a learning step, not a review
+    r("6", NOW - DAY, 3, "review", "other"),
+  ]
+  const all = G.logRetention(log, NOW)
+  t("reviews over the last 30 days", all.reviews === 4 && all.passed === 3 && all.retention === 0.75)
+  t("learning steps and old answers are not counted", all.days === 30)
+  t("limited to the cards asked about", G.logRetention(log, NOW, { c1: true }).reviews === 3)
+  t("split by how the card was answered", all.byMode.free.reviews === 1 && all.byMode.card.reviews === 3)
+
+  const cards = G.parseDeck(JSON.stringify([{ front: "q", back: "a" }])).cards
+  const id = cards[0].id
+  const s = G.deckStats(cards, { reviews: {} }, NOW, 20, 0, log.map((x) => ({ ...x, card: id })))
+  t("deck statistics take it from the log", s.fromLog && s.retentionReviews === 4 && s.retention === 0.75)
+  const m = G.mergeStats(s, null)
+  t("and say it is a monthly figure", G.retentionText(m) === "75% passed, last 30 days")
+  const none = G.mergeStats(G.deckStats(cards, { reviews: {} }, NOW, 20, 0, []), null)
+  t("no reviews yet says so", G.retentionText(none) === "no reviews in the last 30 days")
+  const both = G.mergeStats(s, { total: 5, retention: 1, retentionReviews: 4, retentionDays: 30 })
+  t("with Anki's, weighted by reviews", both.retention === 0.875 && both.retentionLabel === "passed, last 30 days")
+}
+
+group("appending to the log")
+{
+  const home = mkdtempSync(join(tmpdir(), "omengram-log-"))
+  const LOG = ".local/state/omarchy/omengram/reviews-2026-11.jsonl"
+  const a = sh(G.APPEND_SH, home, LOG, '{"v":1,"n":1}\n')
+  const b = sh(G.APPEND_SH, home, LOG, '{"v":1,"n":2}\n')
+  t("an append into an empty home succeeds", a.status === 0 && b.status === 0)
+  t("lines are added, not replaced", readFileSync(join(home, LOG), "utf8") === '{"v":1,"n":1}\n{"v":1,"n":2}\n')
+  t("the file is private", (statSync(join(home, LOG)).mode & 0o777) === 0o600)
+  t("its directory too", (statSync(join(home, ".local/state/omarchy/omengram")).mode & 0o777) === 0o700)
+
+  // Two surfaces answering at once: every line arrives whole.
+  const line = (i) => JSON.stringify({ v: 1, i, pad: "x".repeat(3000) }) + "\n"
+  const procs = Array.from({ length: 24 }, (_, i) =>
+    new Promise((res) => {
+      const p = spawn("sh", ["-c", G.APPEND_SH, "omengram", home, LOG])
+      p.on("exit", res); p.stdin.end(line(i))
+    }))
+  await Promise.all(procs)
+  const lines = readFileSync(join(home, LOG), "utf8").trim().split("\n")
+  t("appends running at once do not interleave",
+    lines.length === 26 && lines.every((l) => { try { JSON.parse(l); return true } catch { return false } }))
+
+  const decoy = makeDecoy()
+  const LINKED = ".local/state/omarchy/omengram/reviews-2026-10.jsonl"
+  symlinkSync(join(decoy, "omengram.json"), join(home, LINKED))
+  t("a symlinked log file is refused", sh(G.APPEND_SH, home, LINKED, "{}\n").status === 65)
+  t("  and its target untouched", readFileSync(join(decoy, "omengram.json"), "utf8") === "untouched\n")
+
+  const home2 = makeHome()
+  rmSync(join(home2, ".local/state"), { recursive: true, force: true })
+  symlinkSync(decoy, join(home2, ".local/state"))
+  t("a symlink on the way is refused", sh(G.APPEND_SH, home2, ".local/state/omarchy/omengram/r.jsonl", "{}\n").status === 65)
+}
+
+group("reading the end of the log")
+{
+  const home = mkdtempSync(join(tmpdir(), "omengram-logtail-"))
+  const dir = ".local/state/omarchy/omengram"
+  const tail = (...names) => spawnSync("sh", ["-c", G.LOGTAIL_SH, "omengram", home, dir + "/" + names[0], ...names.slice(1)],
+                                       { encoding: "utf8" })
+  t("no log yet is nothing, quietly", tail("reviews-2026-11.jsonl").status === 0 && tail("reviews-2026-11.jsonl").stdout === "")
+  mkdirSync(join(home, dir), { recursive: true })
+  writeFileSync(join(home, dir, "reviews-2026-11.jsonl"), '{"v":1,"a":1}\n')
+  writeFileSync(join(home, dir, "reviews-2026-10.jsonl"), '{"v":1,"b":1}\n')
+  const r = tail("reviews-2026-11.jsonl", "reviews-2026-10.jsonl", "../escape", "missing.jsonl")
+  t("both months, each after its header",
+    r.stdout === '#omengram-log reviews-2026-11.jsonl 0\n{"v":1,"a":1}\n\n#omengram-log reviews-2026-10.jsonl 0\n{"v":1,"b":1}\n\n')
+
+  const big = Array.from({ length: 20000 }, (_, i) => JSON.stringify({ v: 1, rid: "r" + i, card: "c", at: i + 1, rating: 3, sb: "review" })).join("\n") + "\n"
+  writeFileSync(join(home, dir, "reviews-2026-09.jsonl"), big)
+  const cut = tail("reviews-2026-09.jsonl")
+  const skipped = Buffer.byteLength(big) - G.LOG_READ_LIMIT
+  t("a long file is read from its end", cut.stdout.startsWith("#omengram-log reviews-2026-09.jsonl " + skipped + "\n"))
+  const parsed = G.parseLog(cut.stdout)
+  t("  and parses whole, the cut line dropped",
+    parsed.length > 1000 && parsed[parsed.length - 1].rid === "r19999" && parsed.every((x) => x.rating === 3))
+
+  symlinkSync(join(home, dir, "reviews-2026-10.jsonl"), join(home, dir, "reviews-2026-08.jsonl"))
+  t("a symlinked month is skipped", tail("reviews-2026-08.jsonl").stdout === "")
+}
 
 // ---------------------------------------------------------------- library
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b)

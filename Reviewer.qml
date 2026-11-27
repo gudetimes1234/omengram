@@ -72,6 +72,13 @@ Item {
     profile: root.ankiProfile
   }
 
+  // Every answer to a library card, for the statistics. Anki keeps its own.
+  ReviewLog {
+    id: reviewLog
+    stateDir: root.stateDir
+  }
+  readonly property alias reviewLog: reviewLog
+
   // False whenever the panel is closed, so a session neither ticks nor holds
   // a card revealed while nobody is looking at it.
   property bool active: false
@@ -137,6 +144,10 @@ Item {
 
   property bool revealed: false
 
+  // How the card on screen is being answered, for the log: "card" for a plain
+  // card, "recall", "free" or "line" for a drill.
+  property string answerMode: "card"
+
   // Answers taken back, newest last. In memory and per sitting: undo is for
   // the grade you just fumbled, not a history you carry between sessions, and
   // a snapshot from an hour ago could no longer be true after the other
@@ -201,7 +212,8 @@ Item {
   // Recomputed whenever the deck, the progress, or the clock moves, which is
   // exactly when a statistic could have changed.
   readonly property var deckStats: Anki.mergeStats(
-      Anki.deckStats(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay),
+      Anki.deckStats(root.cards, root.progress, root.now, root.newPerDay, root.reviewsPerDay,
+                     reviewLog.loaded ? reviewLog.answers : null),
       ankiSource.inUse ? ankiSource.stats : null)
 
   // Something Anki said about the last answer or undo, for a few seconds:
@@ -248,7 +260,7 @@ Item {
     onTriggered: root.leechNotice = ""
   }
 
-  Component.onCompleted: root.reload()
+  Component.onCompleted: { root.reload(); reviewLog.read() }
 
   // Coming back is the moment to pick up deck edits made while the panel was
   // closed, and to drop a card that was left face-up in the last session.
@@ -259,6 +271,7 @@ Item {
       root.undoStack = []
       root.pinSource = ""
       root.reload()
+      reviewLog.read()
     }
   }
 
@@ -366,11 +379,17 @@ Item {
     // from one whose history merely looks new, so taking back a card's first
     // answer removes its entry instead of leaving a zeroed one behind — which
     // would otherwise count against the day's new-card allowance forever.
+    var record = Anki.logRecord({
+      card: root.current, before: before, after: after, grade: g, now: root.now,
+      ms: Date.now() - root.shownAt, mode: root.answerMode
+    })
+
     root.undoStack = root.undoStack.concat([{
       source: "json",
       id: id,
       had: Object.prototype.hasOwnProperty.call(reviews, id),
-      before: before
+      before: before,
+      rid: record.rid
     }]).slice(-Anki.UNDO_DEPTH)
 
     reviews[id] = after
@@ -378,6 +397,7 @@ Item {
 
     root.answered++
     root.save()
+    reviewLog.append(record)
     root.rebuild()
     root.graded(g)
   }
@@ -469,6 +489,7 @@ Item {
     root.progress = { reviews: reviews }
     root.answered = Math.max(0, root.answered - 1)
     root.save()
+    if (last.rid) reviewLog.append(Anki.undoRecord(last.rid, root.now))
 
     // Undoing the lapse that made a leech takes the mark back with it, since
     // the whole prior state is restored — so a notice still on screen would be

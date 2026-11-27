@@ -328,8 +328,7 @@ Item {
         width: parent.width
         wrapMode: Text.Wrap
         text: root.stats
-            ? [Anki.memoryLine(root.stats), Anki.percent(root.stats.retention) + " "
-                + (root.stats.retentionLabel || "never relearned")].filter(Boolean).join("  ·  ")
+            ? [Anki.memoryLine(root.stats), Anki.retentionText(root.stats)].filter(Boolean).join("  ·  ")
               + "  ·  " + root.stats.lapsed + (root.stats.lapsed === 1 ? " lapsed card" : " lapsed cards")
             : ""
         color: root.foreground
