@@ -455,8 +455,12 @@ Item {
             // for those few seconds that is the more useful thing to read.
             text: reviewer.leechNotice
                 ? reviewer.leechNotice + "  ·  s stats to restore"
+                : reviewer.typing && reviewer.lining
+                ? "enter submit  ·  ctrl+h hint  ·  ctrl+y why  ·  ctrl+e show line"
+                  + "  ·  ctrl+p pattern  ·  ctrl+l free typing  ·  esc leave"
                 : reviewer.typing
-                ? "ctrl+enter check" + (reviewer.canRun ? "  ·  ctrl+r run tests" : "")
+                ? "ctrl+enter check" + (reviewer.canLine ? "  ·  ctrl+l line drill" : "")
+                  + "" + (reviewer.canRun ? "  ·  ctrl+r run tests" : "")
                   + "  ·  tab indent  ·  esc leave the editor"
                 : (reviewer.revealed ? "1-4 grade  ·  space good"
                    : reviewer.canType ? "i type" + (reviewer.canRun ? "  ·  t run tests" : "")

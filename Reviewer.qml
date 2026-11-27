@@ -151,6 +151,7 @@ Item {
   // card; for a drill, "free" once typed and checked, "recall" when revealed
   // without typing.
   readonly property string answerMode: !root.currentDrill ? "card"
+      : root.lineState ? "line"
       : (root.checkResult || runner.result) ? "free" : "recall"
 
   // Typing an answer, which only a surface with room for an editor offers:
@@ -162,7 +163,12 @@ Item {
   // checked (Drill.diff). Both cleared when the card changes.
   readonly property string typed: editor.text
   property var checkResult: null
-  readonly property bool typing: editor.editing
+  readonly property bool typing: editor.editing || lineDrill.editing
+  // Line Drill (Drill.js): the solution a line at a time. New and relearning
+  // drills with patterns open in it, reviews in free typing; Ctrl+L switches.
+  property var lineState: null
+  readonly property bool canLine: root.canType && root.currentDrill.patterns.length > 0
+  readonly property bool lining: root.canType && root.lineState !== null
   // A code drill with tests, typed in the overlay, can run them (bridge/run.py,
   // inside bubblewrap). Running never reveals the answer.
   readonly property bool canRun: root.canType && root.currentDrill.kind === "code"
@@ -375,6 +381,27 @@ Item {
     editor.clear()
     root.checkResult = null
     runner.cancel()
+    var phase = root.currentState ? root.currentState.phase : ""
+    root.lineState = root.canLine && (phase === "new" || phase === "relearning")
+        ? Drill.lineStart(root.currentDrill.patterns) : null
+  }
+
+  function toLineDrill() {
+    if (!root.canLine || root.revealed) return
+    if (!root.lineState) root.lineState = Drill.lineStart(root.currentDrill.patterns)
+    Qt.callLater(lineDrill.focusInput)
+  }
+
+  function toFreeTyping() {
+    if (!root.canType || root.revealed) return
+    root.lineState = null
+    Qt.callLater(editor.focusEditor)
+  }
+
+  // Every line in: the answer is shown, and grading is yours as ever.
+  function lineDone() {
+    root.revealed = true
+    root.releaseKeys()
   }
 
   // Run what has been typed against the card's tests.
@@ -386,7 +413,8 @@ Item {
   // Into the editor, for a drill not yet answered.
   function startTyping() {
     if (!root.canType || root.revealed) return
-    editor.focusEditor()
+    if (root.lineState) lineDrill.focusInput()
+    else editor.focusEditor()
   }
 
   function stopTyping() {
@@ -453,7 +481,12 @@ Item {
     var record = Anki.logRecord({
       card: root.current, before: before, after: after, grade: g, now: root.now,
       ms: Date.now() - root.shownAt, mode: root.answerMode,
-      revealed: root.revealed, tests: runner.tally()
+      // Shown rather than produced: recall always; Line Drill when a line
+      // was shown, or the answer before every line was in.
+      revealed: root.answerMode === "recall" || (root.answerMode === "line"
+          && (Drill.lineAnyRevealed(root.lineState) || !Drill.lineComplete(root.lineState))),
+      recall: root.answerMode === "recall",
+      tests: runner.tally()
     })
 
     root.undoStack = root.undoStack.concat([{
@@ -970,10 +1003,25 @@ Item {
           }
 
           // Typing the answer, before it is shown.
+          LineDrill {
+            id: lineDrill
+            width: parent.width
+            visible: root.lining && !root.revealed
+            drill: root.lineState
+            foreground: root.foreground
+            accent: root.accent
+            urgent: root.urgent
+            fontSize: Math.round(root.answerFontSize * 0.8)
+            onStepped: function(next) { root.lineState = next }
+            onFinished: root.lineDone()
+            onEscaped: root.stopTyping()
+            onFreeTypingRequested: root.toFreeTyping()
+          }
+
           DrillEditor {
             id: editor
             width: parent.width
-            visible: root.canType && !root.revealed
+            visible: root.canType && !root.revealed && !root.lining
             foreground: root.foreground
             accent: root.accent
             fontSize: Math.round(root.answerFontSize * 0.8)
@@ -985,6 +1033,8 @@ Item {
             canRun: root.canRun
             onSubmitted: root.checkTyped()
             onRunRequested: root.runTests()
+            canLine: root.canLine
+            onLineDrillRequested: root.toLineDrill()
             onEscaped: root.stopTyping()
           }
 
@@ -1007,6 +1057,25 @@ Item {
             accent: root.accent
             urgent: root.urgent
             fontSize: Math.round(root.answerFontSize * 0.7)
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            width: parent.width
+            visible: root.revealed && root.lining
+            wrapMode: Text.Wrap
+            text: {
+              if (!root.lineState) return ""
+              var p = Drill.lineProgress(root.lineState)
+              var shown = Object.keys(root.lineState.revealed).length
+              return "Line Drill  ·  " + (p.done - shown) + " of " + p.total + " lines typed"
+                  + (shown ? "  ·  " + shown + " shown" : "")
+                  + (Drill.lineHelpUsed(root.lineState) ? "  ·  hints used" : "")
+            }
+            color: root.foreground
+            opacity: 0.6
+            font.family: "monospace"
+            font.pixelSize: Style.font.caption
           }
 
           DiffView {
@@ -1047,7 +1116,7 @@ Item {
           Text {
             textFormat: Text.PlainText
             width: parent.width
-            visible: !root.revealed && !editor.visible
+            visible: !root.revealed && !editor.visible && !lineDrill.visible
             horizontalAlignment: Text.AlignHCenter
             text: "space to reveal"
             color: root.foreground

@@ -648,10 +648,13 @@ node tests/drill.test.mjs
 python3 tests/test_import_gleamdrill.py
 prlimit --core=1:1 -- python3 tests/test_runner.py
 tests/qml/run.sh drill-keys
+tests/qml/run.sh line-drill
 ```
 
-The last one types into a drill with real key presses in an off-screen
-Quickshell; it needs a Wayland session to start in, so it is local only.
+The last two type into drills with real key presses in an off-screen
+Quickshell; they need a Wayland session to start in, so they are local only.
+The Line Drill tests port GleamDrill's own, on made-up patterns, with the same
+properties checked over seeded random typing.
 
 ## Layout
 

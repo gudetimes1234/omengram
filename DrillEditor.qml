@@ -9,7 +9,7 @@ import "Drill.js" as Drill
 //   Ctrl+Enter   check          Esc        hand the keys back
 //   Ctrl+R       run the tests  Tab        indent (or the selected lines)
 //   Enter        new line, indented like the last; one more after ":"
-//   Shift+Tab    outdent
+//   Shift+Tab    outdent        Ctrl+L     Line Drill, when the card has one
 Rectangle {
   id: root
 
@@ -21,11 +21,13 @@ Rectangle {
   // Spaces per level; Python's four.
   property int indentWidth: 4
   property bool canRun: false
+  property bool canLine: false
   readonly property bool editing: edit.activeFocus
 
   signal submitted()
   signal escaped()
   signal runRequested()
+  signal lineDrillRequested()
 
   function focusEditor() {
     edit.forceActiveFocus()
@@ -90,6 +92,9 @@ Rectangle {
         var pad = Drill.autoIndent(edit.text, edit.cursorPosition, root.indentWidth)
         edit.remove(edit.selectionStart, edit.selectionEnd)
         edit.insert(edit.cursorPosition, "\n" + pad)
+        event.accepted = true
+      } else if (event.key === Qt.Key_L && ctrl) {
+        if (root.canLine) root.lineDrillRequested()
         event.accepted = true
       } else if (event.key === Qt.Key_R && ctrl) {
         if (root.canRun) root.runRequested()

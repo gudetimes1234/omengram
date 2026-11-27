@@ -59,7 +59,11 @@ ShellRoot {
     Component.onCompleted: steps = [
       function() { return function() { return rev.phase === "reviewing" && rev.typing } },
       function() {
-        check("a drill opens in the editor", rev.typing && rev.canType && !rev.revealed, [rev.typing, rev.canType])
+        check("a new drill opens in Line Drill", rev.typing && rev.lining && !rev.revealed, [rev.typing, rev.lining])
+        w.key(Qt.Key_L, Qt.ControlModifier)
+        return function() { return rev.typing && !rev.lining } },
+      function() {
+        check("ctrl+l switches to free typing, keeping the keys", rev.typing && rev.canType && !rev.lining, [rev.typing, rev.lining])
         w.type("1a4 ")
         return function() { return rev.typed.length > 0 } },
       function() {
