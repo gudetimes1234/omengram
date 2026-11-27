@@ -37,15 +37,12 @@ Item {
   property int leechThreshold: Anki.LEECH_THRESHOLD
   property bool leechSuspend: true
 
-  // How much of a lapsed card's interval survives the lapse, as a percentage.
-  // Anki's own default is 0; see LAPSE_PERCENT for why this one differs.
-  property int lapsePercent: Anki.LAPSE_PERCENT
+  // The share of reviews FSRS schedules you to pass, as a percentage.
+  property int retention: Anki.RETENTION
 
-  // Everything a grade depends on beyond the card itself. Named for what it is
-  // rather than for the leeches it used to be, now that it carries the lapse
-  // share too.
+  // Everything a grade depends on beyond the card itself.
   readonly property var gradeOpts: ({
-    lapsePercent: root.lapsePercent,
+    retention: root.retention,
     leechThreshold: root.leechThreshold,
     leechSuspend: root.leechSuspend
   })
@@ -198,7 +195,7 @@ Item {
   readonly property var preview: root.source === "anki" && ankiSource.card.intervals
       ? ankiSource.card.intervals
       : root.current
-      ? Anki.previewIntervals(root.currentState, root.now)
+      ? Anki.previewIntervals(root.currentState, root.now, root.gradeOpts)
       : ({ again: "", hard: "", good: "", easy: "" })
 
   // Recomputed whenever the deck, the progress, or the clock moves, which is

@@ -27,6 +27,11 @@ jobs:
       - name: Scheduler and file-handling tests
         run: node tests/scheduler.test.mjs
 
+      # Fsrs.js against py-fsrs's own output (tests/fsrs-vectors.json, made by
+      # tools/gen_fsrs_vectors.py), so a drift from upstream fails here.
+      - name: FSRS conformance tests
+        run: node tests/fsrs.test.mjs
+
       # Card text is imported content and Qt's Text defaults to AutoText, which
       # interprets markup. These assert every sink forces plain text, so a Text
       # added later cannot quietly reintroduce it.

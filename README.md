@@ -215,7 +215,7 @@ tab carries a button instead, which is the more discoverable of the two anyway.
 ## Undo
 
 `u` takes back the last answer. The card returns to exactly the state it was in
-— interval, ease, lapse count, and the day's new-card allowance — and comes
+— its memory, due date, lapse count, and the day's new-card allowance — and comes
 back **revealed and in front of you**, so the next keystroke can be the grade
 you meant. Taking back a card's very first answer removes its history
 altogether rather than leaving a zeroed entry behind, so it counts as new
@@ -351,14 +351,14 @@ hot-reloads on save.
 | `showCount` | `true` | Show the waiting count next to the bar glyph. |
 | `tags` | *(none)* | Restrict the session to cards carrying any of these tags. Set from the picker. |
 | `reviewsPerDay` | `0` | Cap how many due cards a day serves. `0` means no cap. |
-| `lapsePercent` | `50` | How much of a forgotten card's interval survives, as a percentage. `0` is Anki's default. |
+| `retention` | `90` | The share of reviews FSRS schedules you to pass, as a percentage (70–99). Higher means shorter gaps. |
 | `leechThreshold` | `8` | Lapses before a card counts as a leech. `0` turns leeches off. |
 | `leechSuspend` | `true` | Take a leech out of the rotation rather than only marking it. |
 | `anki` | `true` | Study Anki's collection beside the library. |
 | `ankiProfile` | *(the only one)* | Which Anki profile to use. |
 | `syncInterval` | `15` | Minutes between syncs with AnkiWeb. `0` syncs only when asked. |
 
-`newPerDay`, `reviewsPerDay`, `lapsePercent` and the leech settings apply to
+`newPerDay`, `reviewsPerDay`, `retention` and the leech settings apply to
 library decks. Anki decks use their own deck options in Anki.
 
 ```json
@@ -388,73 +388,30 @@ though layout changes hot-reload.
 
 ## How the scheduling works
 
-SM-2, in the shape Anki uses it.
+FSRS-6, the scheduler Anki uses by default. `Fsrs.js` is a port of
+GleamDrill's FSRS, checked against the reference py-fsrs: `tests/fsrs-vectors.json`
+is py-fsrs's own output (`tools/gen_fsrs_vectors.py`), and `tests/fsrs.test.mjs`
+compares every value.
 
-A **new** card is shown after 1 minute, then after 10, then graduates to a
-1-day interval. *Easy* skips straight to 4 days. Nothing in this phase touches
-ease — a card you have not learned yet has no history to judge it by.
+FSRS keeps two numbers per card. **Stability** is how many days until your
+chance of recalling it falls to 90%; **difficulty** runs from 1 to 10. Each
+answer updates both from the grade and from how long it had been, and the
+next gap is the time until recall falls to the `retention` you aim for (90%).
 
-A **review** card's interval is multiplied by its ease factor (2.5 to start).
-*Hard* multiplies by 1.2 and costs 150 ease, *Good* multiplies by the ease
-itself, *Easy* adds a 1.3 bonus and earns 150 ease. Ease is held between 1.3
-and 3.0. The ease a grade earns or costs applies to the *next* answer, not the
-one that earned it — Anki picks the interval before it moves the factor, so
-*Easy*'s bonus multiplies the factor the card arrived with.
+A **new** card is shown after 1 minute, then after 10, then graduates; *Easy*
+skips the steps. Forgetting a card in review (*Again*) is a **lapse**: it
+relearns after 10 minutes and comes back with a shorter gap and a higher
+difficulty. Answering a card long after it was due, and still knowing it,
+counts for more than answering on time, since it held for longer.
 
-The three passing grades are worked out as one chain, each floored a day above
-the one below it. That is what guarantees a passing grade always pushes a card
-further out than it was even when the multiplier rounds to nothing, and that
-*Hard* can never schedule a longer gap than *Good*.
+Each review interval is **spread** over a few days around itself, as FSRS
+does, so cards answered together do not stay clumped together. The spread is
+applied when you answer, not when the grades are priced, so the interval on
+each button holds still while you decide.
 
-**Answering late counts for something.** If a card was due in ten days, you did
-not see it for fifty, and you still knew it, then your memory holds it for
-something like fifty days rather than ten — and scheduling from the ten throws
-away what the answer just demonstrated. So *Good* adds half the lateness to the
-interval before multiplying, and *Easy* adds all of it:
-
-| 10-day card, answered | *Good* gives |
-|---|---|
-| on time | 25 days |
-| 20 days late | 50 days |
-| 40 days late | 75 days |
-
-*Hard* credits none of it — a struggle is not evidence of comfortable recall,
-however long the gap was. Answering **early** earns nothing and costs nothing.
-
-This matters more here than it does in Anki. A bar widget is for clicking in
-passing, so coming back to a backlog is the normal case rather than the
-exception; without the credit, every card you still know would be re-served far
-sooner than the evidence warrants and the backlog would rebuild faster than it
-should.
-
-Each new interval is then **spread** over a small band around itself — a few
-percent for a long one, proportionally more for a short one, the same bands
-Anki uses. Cards answered together otherwise come due together and stay that
-way, and a deck built in a few sittings collapses into a few permanent clumps.
-The spread is applied when you answer, not when the grades are priced, so the
-interval on each button is the unspread one and holds still while you decide.
-Lapses and leaving relearning are not spread: those restore an interval the
-card already had rather than computing a new one.
-
-*Again* on a review card is a **lapse**: it costs 200 ease, cuts the interval,
-and sends the card through a 10-minute relearning step. Coming out of
-relearning restores whatever the lapse left rather than starting over, so the
-cut is what decides where a forgotten card lands when it comes back.
-
-How deep that cut goes is `lapsePercent`, and it defaults to **50** — half the
-interval survives. Anki calls the same setting *New interval* and defaults it
-to **0**, which sends a forgotten card back to a single day however long it had
-been holding. Both are defensible and the disagreement is genuine: at 0 the
-card was forgotten, so the spacing that produced the forgetting has been
-disproved; at 50 one slip on a card held for months is weak evidence against
-months of successful recall, and starting over throws away the rest. Set it to
-`0` for Anki's behaviour.
-
-The result is floored at one day whatever the percentage, which is Anki's
-minimum interval — a setting it also exposes and this one does not, a day being
-the only value that has ever made sense for it. A lapse always costs the same
-200 ease and always relearns, at every percentage; only the interval waiting on
-the other side changes.
+Progress from before FSRS (SM-2, which omengram used first) carries over: a
+card's interval becomes its stability and its ease its difficulty, and its
+due date does not move.
 
 A card that keeps being forgotten becomes a **leech**. Past some number of
 lapses the card is the problem rather than your memory — the question is
@@ -464,7 +421,7 @@ takes it out of the rotation; it is raised again every four lapses after that,
 so a leech you decide to keep does not nag on every slip. Both numbers follow
 Anki's.
 
-A suspended card is hidden, not rewritten. Its interval, ease and due date go
+A suspended card is hidden, not rewritten. Its memory and due date go
 on being exactly what the scheduler last made them, so restoring one puts it
 back where it was rather than at the beginning.
 

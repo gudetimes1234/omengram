@@ -15,7 +15,13 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
-const src = readFileSync(join(here, "..", "Anki.js"), "utf8")
+// Anki.js imports Fsrs.js the QML way; here the import line is dropped and
+// the same file is handed in as `Fsrs`.
+const src = readFileSync(join(here, "..", "Anki.js"), "utf8").replace(/^\.import "Fsrs\.js" as Fsrs$/m, "")
+const fsrsSrc = readFileSync(join(here, "..", "Fsrs.js"), "utf8").replace(/^\.pragma library$/m, "")
+const Fsrs = {}
+new Function("exports", `${fsrsSrc}\nfor (const k of ${JSON.stringify(
+  [...fsrsSrc.matchAll(/^(?:function|var) ([A-Za-z_]\w*)/gm)].map((m) => m[1]))}) exports[k] = eval(k)`)(Fsrs)
 
 const EXPORTS = [
   "MINUTE", "HOUR", "DAY", "GRADES", "LEARNING_STEPS", "RELEARNING_STEPS",
@@ -26,10 +32,9 @@ const EXPORTS = [
   "mergeProgress", "introducedToday", "reviewsToday", "remainingToday",
   "deckStats", "percent", "appendCard", "dirOf", "baseOf", "MATURE_INTERVAL",
   "resolveDeck", "sanePerDay", "normalizeTags", "filterByTags", "sectionLabel", "promote", "UNDO_DEPTH",
-  "READ_SH", "WRITE_SH", "relativeToHome", "READ_LIMIT", "fuzzInterval", "hitReadLimit",
+  "READ_SH", "WRITE_SH", "relativeToHome", "READ_LIMIT", "hitReadLimit",
   "LEECH_THRESHOLD", "isLeechLapse", "leechConfig", "unsuspendAll",
-  "daysLate", "constrainIvl", "HARD_MULTIPLIER", "EASY_BONUS",
-  "LAPSE_PERCENT", "lapseFactor",
+  "RETENTION", "saneRetention", "migrate", "memoryLine",
   "LIST_SH", "deckMatches", "pathMatches", "normalizeDecks", "scopeLabel", "resolveDeckDir",
   "parseListing", "buildDeckTree", "nodeState", "toggleDeck", "toggleTag", "assignDeck",
   "mergeDecks", "deckRows", "tagRows", "normalizeLimits", "withLimit", "stepLimit",
@@ -38,7 +43,7 @@ const EXPORTS = [
   "mergeCounts", "mergeStats", "dropAnkiUndo", "ago", "parseSyncStatus", "syncLine",
 ]
 const G = {}
-new Function("exports", `${src}\nfor (const k of ${JSON.stringify(EXPORTS)}) exports[k] = eval(k)`)(G)
+new Function("exports", "Fsrs", `${src}\nfor (const k of ${JSON.stringify(EXPORTS)}) exports[k] = eval(k)`)(G, Fsrs)
 
 let pass = 0, fail = 0
 const t = (name, cond) => {
@@ -53,80 +58,111 @@ const { DAY, MINUTE } = G
 group("a new card walks the learning steps")
 {
   const fresh = G.newState()
-  t("starts new with no interval", fresh.phase === "new" && fresh.interval === 0)
+  t("starts new with no interval or memory",
+    fresh.phase === "new" && fresh.interval === 0 && fresh.stability === null)
 
   const first = G.grade(fresh, "good", NOW)
   t("good moves to the second step, not to review",
     first.phase === "learning" && first.step === 1 && first.due === NOW + 10 * MINUTE)
+  t("the first answer gives the card a memory", first.stability > 0 && first.difficulty > 0)
 
-  const graduated = G.grade(first, "good", NOW)
-  t("good again graduates at one day",
-    graduated.phase === "review" && graduated.interval === DAY && graduated.due === NOW + DAY)
+  const graduated = G.grade(first, "good", NOW + 10 * MINUTE)
+  t("good again graduates, two days out as FSRS has it",
+    graduated.phase === "review" && graduated.interval === 2 * DAY
+    && graduated.due === NOW + 10 * MINUTE + 2 * DAY)
 
   t("again restarts the steps",
     G.grade(first, "again", NOW).step === 0 && G.grade(first, "again", NOW).due === NOW + MINUTE)
   t("hard repeats the current step",
     G.grade(first, "hard", NOW).step === 1 && G.grade(first, "hard", NOW).due === NOW + 10 * MINUTE)
-  t("easy graduates straight to four days",
-    G.grade(fresh, "easy", NOW).phase === "review" && G.grade(fresh, "easy", NOW).interval === 4 * DAY)
-  t("learning never touches ease", first.ease === G.STARTING_EASE && graduated.ease === G.STARTING_EASE)
+  const easy = G.grade(fresh, "easy", NOW)
+  t("easy graduates straight to eight days", easy.phase === "review" && easy.interval === 8 * DAY)
   t("every answer counts as a rep", first.reps === 1 && graduated.reps === 2)
+  t("the answer is stamped", graduated.updated === NOW + 10 * MINUTE && graduated.lastReview === NOW + 10 * MINUTE)
 }
 
-group("review intervals grow by ease")
+group("review intervals follow stability")
 {
-  const review = { phase: "review", due: NOW, interval: 10 * DAY, ease: 2500, reps: 5, lapses: 0, step: 0 }
+  // Ten days held, answered on the day it was due: recall is at 90%.
+  const review = G.normalizeState({ phase: "review", due: NOW, interval: 10 * DAY, ease: 2500, reps: 5 })
+  const hard = G.grade(review, "hard", NOW), good = G.grade(review, "good", NOW), easy = G.grade(review, "easy", NOW)
 
-  t("good multiplies by the ease factor", G.grade(review, "good", NOW).interval === 25 * DAY)
-  t("good leaves ease alone", G.grade(review, "good", NOW).ease === 2500)
-  t("hard grows more slowly than good",
-    G.grade(review, "hard", NOW).interval < G.grade(review, "good", NOW).interval)
-  t("hard costs ease", G.grade(review, "hard", NOW).ease === 2350)
-  t("easy grows faster than good",
-    G.grade(review, "easy", NOW).interval > G.grade(review, "good", NOW).interval)
-  t("easy earns ease", G.grade(review, "easy", NOW).ease === 2650)
-  t("due follows the new interval", G.grade(review, "good", NOW).due === NOW + 25 * DAY)
-}
-
-group("a passing grade always moves the card further out")
-{
-  // Ease floored and a one-day interval: every multiplier rounds back to the
-  // interval it started from, and without a guard the card sticks there.
-  const stuck = { phase: "review", due: NOW, interval: DAY, ease: G.MIN_EASE, reps: 9, lapses: 4, step: 0 }
-  for (const g of ["hard", "good", "easy"])
-    t(`${g} exceeds the previous interval`, G.grade(stuck, g, NOW).interval > stuck.interval)
+  t("good moves the card further out", good.interval > 10 * DAY)
+  t("hard grows more slowly than good", hard.interval < good.interval)
+  t("easy grows faster than good", easy.interval > good.interval)
+  t("due follows the new interval", good.due === NOW + good.interval)
+  t("hard makes the card harder", hard.difficulty > review.difficulty)
+  t("easy makes it easier", easy.difficulty < review.difficulty)
+  t("intervals are whole days", [hard, good, easy].every((s) => s.interval % DAY === 0))
 }
 
 group("lapses")
 {
-  const review = { phase: "review", due: NOW, interval: 20 * DAY, ease: 2500, reps: 8, lapses: 1, step: 0 }
+  const review = G.normalizeState({ phase: "review", due: NOW, interval: 20 * DAY, ease: 2500, reps: 8, lapses: 1 })
   const lapsed = G.grade(review, "again", NOW)
 
   t("again enters relearning", lapsed.phase === "relearning")
   t("again counts a lapse", lapsed.lapses === 2)
-  t("again costs 200 ease", lapsed.ease === 2300)
-  t("again halves the interval", lapsed.interval === 10 * DAY)
   t("again is due in ten minutes", lapsed.due === NOW + 10 * MINUTE)
+  t("forgetting cuts stability", lapsed.stability < review.stability)
+  t("and raises difficulty", lapsed.difficulty > review.difficulty)
 
-  const recovered = G.grade(lapsed, "good", NOW)
-  t("leaving relearning restores the halved interval, not a fresh day",
-    recovered.phase === "review" && recovered.interval === 10 * DAY)
-  t("again inside relearning stays there",
-    G.grade(lapsed, "again", NOW).phase === "relearning")
+  const recovered = G.grade(lapsed, "good", NOW + 10 * MINUTE)
+  t("leaving relearning returns to review, shorter than before",
+    recovered.phase === "review" && recovered.interval >= DAY && recovered.interval < 20 * DAY)
+  t("again inside relearning stays there and is not another lapse",
+    G.grade(lapsed, "again", NOW).phase === "relearning" && G.grade(lapsed, "again", NOW).lapses === 2)
   t("easy inside relearning leaves immediately",
     G.grade(lapsed, "easy", NOW).phase === "review")
 }
 
-group("ease and interval stay in range")
+group("memory and interval stay in range")
 {
-  let s = { phase: "review", due: NOW, interval: DAY, ease: G.MIN_EASE, reps: 1, lapses: 0, step: 0 }
-  for (let i = 0; i < 20; i++) s = G.grade({ ...s, phase: "review" }, "again", NOW)
-  t("ease has a floor", s.ease === G.MIN_EASE)
+  let s = G.normalizeState({ phase: "review", due: NOW, interval: DAY, ease: 2500, reps: 1 })
+  let at = NOW
+  for (let i = 0; i < 20; i++) { at += DAY; s = G.grade({ ...s, phase: "review" }, "again", at) }
+  t("difficulty has a ceiling", s.difficulty <= 10)
+  t("stability has a floor", s.stability >= 0.001)
 
-  let e = { phase: "review", due: NOW, interval: DAY, ease: G.MAX_EASE, reps: 1, lapses: 0, step: 0 }
-  for (let i = 0; i < 20; i++) e = { ...G.grade(e, "easy", NOW) }
-  t("ease has a ceiling", e.ease === G.MAX_EASE)
+  let e = G.grade(G.newState(), "easy", NOW)
+  at = NOW
+  for (let i = 0; i < 30; i++) { at = e.due; e = G.grade(e, "easy", at) }
+  t("difficulty has a floor", e.difficulty >= 1)
   t("interval has a ceiling", e.interval <= G.MAX_INTERVAL)
+}
+
+group("progress from before FSRS carries over")
+{
+  const sm2 = { phase: "review", due: NOW + 3 * DAY, interval: 12 * DAY, ease: 2500, reps: 6, lapses: 1,
+                step: 0, updated: NOW - 9 * DAY, firstDay: "2026-01-01" }
+  const m = G.normalizeState(sm2)
+  t("stability is the days it was holding", m.stability === 12)
+  t("SM-2's starting ease is middling difficulty", m.difficulty === 5)
+  t("the lowest ease is the hardest card", G.normalizeState({ ...sm2, ease: G.MIN_EASE }).difficulty === 10)
+  t("a high ease is an easier card", G.normalizeState({ ...sm2, ease: G.MAX_EASE }).difficulty < 3)
+  t("the last answer is worked back from the due date", m.lastReview === NOW - 9 * DAY)
+  t("the due date does not move", m.due === sm2.due)
+  t("the stamp is left alone, so a merge still compares like with like", m.updated === sm2.updated)
+  t("migrating twice changes nothing",
+    JSON.stringify(G.normalizeState(m)) === JSON.stringify(m))
+  t("a card still learning has no memory to carry",
+    G.normalizeState({ phase: "learning", step: 1, due: NOW }).stability === null)
+  t("half a memory state is dropped",
+    G.normalizeState({ phase: "learning", stability: 3 }).stability === null)
+
+  const next = G.grade(sm2, "good", NOW + 3 * DAY)
+  t("its next answer schedules from the carried memory", next.phase === "review" && next.interval > 12 * DAY)
+}
+
+group("the retention setting")
+{
+  const review = G.normalizeState({ phase: "review", due: NOW, interval: 30 * DAY, ease: 2500, reps: 5 })
+  const at = (r) => G.grade(review, "good", NOW, undefined, { retention: r }).interval
+  t("lower retention means longer gaps", at(80) > at(90) && at(90) > at(97))
+  t("retention is clamped to 70-99", G.saneRetention(10) === 70 && G.saneRetention(100) === 99)
+  t("nonsense falls back to 90", G.saneRetention("x") === 90 && G.RETENTION === 90)
+  t("the labels price with the setting",
+    G.previewIntervals(review, NOW, { retention: 80 }).good !== G.previewIntervals(review, NOW).good)
 }
 
 group("hostile state is coerced, never trusted")
@@ -328,7 +364,8 @@ group("undo restores what the answer changed")
 
   const review = { phase: "review", due: NOW, interval: 10 * DAY, ease: 2500, reps: 5, lapses: 0, step: 0 }
   const lapsed = G.grade(review, "again", NOW)
-  t("a lapse changes ease and interval", lapsed.ease !== review.ease && lapsed.interval !== review.interval)
+  t("a lapse changes the memory and the interval",
+    lapsed.stability !== G.normalizeState(review).stability && lapsed.interval !== review.interval)
   t("and leaves the original untouched to restore from",
     review.ease === 2500 && review.interval === 10 * DAY && review.lapses === 0)
 }
@@ -402,7 +439,10 @@ group("deck statistics")
   t("seen is the deck less the new", s.seen === 4)
   t("lapsed cards are counted once each", s.lapsed === 2)
   t("lapses are totalled", s.lapses === 3)
-  t("average ease is over answered cards only", Math.abs(s.ease - 2.45) < 0.001)
+  t("average difficulty is over cards with a memory only",
+    s.difficultyCount === 3 && Math.abs(s.difficulty - (4.5833 + 5.4167 + 5.8333) / 3) < 0.001)
+  t("ease is Anki's alone now", s.easeCount === 0 && s.ease === 0)
+  t("the memory line says difficulty", G.memoryLine(s) === "difficulty " + s.difficulty.toFixed(1))
   t("answered today is counted", s.answeredToday === 2)
   t("retention falls out of lapses over reps", Math.abs(s.retention - (1 - 3 / 21)) < 0.001)
 
@@ -774,74 +814,32 @@ group("a deck too large to read says so")
 
 group("intervals are spread so cards do not stay clumped")
 {
-  const st = (over) => Object.assign(G.newState(), over)
-  const ivl = (state, g, roll) => G.grade(state, g, 0, roll).interval / G.DAY
+  const base = G.normalizeState({ phase: "review", due: NOW, interval: 100 * DAY, ease: 2500, reps: 5 })
+  const ivl = (roll, state = base, g = "good") => G.grade(state, g, NOW, roll).interval / DAY
 
-  // Without a roll nothing moves: this is what previewIntervals relies on, so
-  // the priced labels hold still while the card is on screen.
-  const base = st({ phase: "review", interval: 100 * G.DAY, ease: 2500, reps: 5 })
-  t("no roll means no spreading", ivl(base, "good") === 250)
-  t("an undefined roll is not treated as zero",
-    ivl(base, "good", undefined) === 250)
+  // Without a roll nothing moves: previewIntervals relies on it, so the priced
+  // labels hold still while the card is on screen.
+  const plain = ivl(undefined)
+  t("no roll means no spreading", plain === ivl(null))
   t("a preview and an unfuzzed grade agree",
-    G.previewIntervals(base, 0).good === G.formatInterval(G.grade(base, "good", 0).due))
+    G.previewIntervals(base, NOW).good === G.formatInterval(G.grade(base, "good", NOW).due - NOW))
 
-  // 5% band on a long interval: 250 days spreads over 238-262.
-  const lo = ivl(base, "good", 0)
-  const hi = ivl(base, "good", 0.999999)
-  t("the low end of a long interval's band is 5% short", lo === 238)
-  t("the high end of a long interval's band is 5% long", hi === 262)
-  t("the unspread interval sits inside its own band", lo < 250 && 250 < hi)
+  // FSRS's band: 5% beyond 20 days (plus the narrower bands below it).
+  const lo = ivl(0), hi = ivl(0.999999)
+  t("the low end is a few percent short", lo < plain && lo >= plain * 0.9)
+  t("the high end is a few percent long", hi > plain && hi <= plain * 1.1)
+  let inside = true
+  for (let r = 0; r < 1; r += 0.05) { const v = ivl(r); inside = inside && v >= lo && v <= hi && v % 1 === 0 }
+  t("every roll lands inside the band, on a whole day", inside)
+  t("a nonsense roll is ignored rather than propagated", ivl("x") === plain)
+  t("a roll out of range is clamped to the band", ivl(5) === hi && ivl(-3) === lo)
 
-  // The band widens with the interval, which is the whole point: a 3-week card
-  // spreads by days, a 3-day card by less than one.
-  const short = st({ phase: "review", interval: 10 * G.DAY, ease: 2500, reps: 5 })
-  t("a mid-length interval uses the 15% band",
-    ivl(short, "good", 0) === 22 && ivl(short, "good", 0.999999) === 28)
-
-  // Every roll has to land inside the band, and never below the floor that
-  // guarantees a passing answer moves the card further out than it was.
-  let inBand = true, moved = true
-  for (let i = 0; i <= 100; i++) {
-    const v = ivl(base, "good", i / 100)
-    if (v < 238 || v > 262) inBand = false
-    if (v <= 100) moved = false
-  }
-  t("every roll lands inside the band", inBand)
-  t("every roll still moves the card further out", moved)
-
-  // The case the floor exists for: 3 days at minimum ease grows to 4, whose
-  // band opens at 3 — the interval the card already had.
-  const tight = st({ phase: "review", interval: 3 * G.DAY, ease: 1300, reps: 9 })
-  let never = true
-  for (let i = 0; i <= 100; i++) if (ivl(tight, "good", i / 100) <= 3) never = false
-  t("spreading never cancels a passing answer's progress", never)
-
-  // Rolls are drawn by the caller, but the state comes off disk and the value
-  // is a number from somewhere; nonsense must not produce a nonsense interval.
-  t("a nonsense roll is ignored rather than propagated",
-    ivl(base, "good", NaN) === 250 && ivl(base, "good", "x") === 250)
-  t("a roll out of range is clamped to the band",
-    ivl(base, "good", -5) === 238 && ivl(base, "good", 5) === 262)
-
-  // Matching Anki: learning steps, lapses and leaving relearning are not
-  // spread, and a 1-day graduating interval has nowhere to go.
-  t("graduating at one day is unchanged by any roll",
-    ivl(st({ phase: "learning", step: 1 }), "good", 0) === 1 &&
-    ivl(st({ phase: "learning", step: 1 }), "good", 0.99) === 1)
-  t("easy out of learning is spread over 3-5 days",
-    ivl(st({}), "easy", 0) === 3 && ivl(st({}), "easy", 0.999999) === 5)
-  t("a lapse is not spread",
-    ivl(st({ phase: "review", interval: 100 * G.DAY, reps: 5 }), "again", 0.99) === 50)
-  t("leaving relearning restores the interval exactly",
-    ivl(st({ phase: "relearning", interval: 50 * G.DAY, reps: 6 }), "good", 0.99) === 50)
-
-  // A two-day card is Anki's one asymmetric case: it may lengthen but must
-  // never be pulled back to a single day.
-  t("a two-day interval spreads upward only",
-    G.fuzzInterval(2 * G.DAY, 0) === 2 * G.DAY &&
-    G.fuzzInterval(2 * G.DAY, 0.999999) === 3 * G.DAY)
-  t("a one-day interval cannot be spread", G.fuzzInterval(G.DAY, 0.999999) === G.DAY)
+  // Short intervals and learning steps have nowhere to spread to.
+  const fresh = G.newState()
+  t("a learning step is not spread", G.grade(fresh, "good", NOW, 0).due === G.grade(fresh, "good", NOW, 0.99).due)
+  t("a lapse is not spread", G.grade(base, "again", NOW, 0).due === G.grade(base, "again", NOW, 0.99).due)
+  const graduated = (roll) => G.grade(G.grade(fresh, "good", NOW), "good", NOW + 600, roll).interval
+  t("graduating at two days is unchanged by any roll", graduated(0) === graduated(0.99))
 }
 
 group("the document itself is never interpolated")
@@ -887,7 +885,7 @@ group("a card that keeps lapsing becomes a leech")
 
   // Suspending hides a card; it does not rewrite what the scheduler did.
   t("a suspended card is still scheduled underneath",
-    seventh.phase === "relearning" && seventh.interval === 15 * G.DAY && seventh.ease === 2300)
+    seventh.phase === "relearning" && seventh.due === 10 * G.MINUTE && seventh.stability > 0)
 
   t("flagging without suspending is possible",
     (() => {
@@ -1045,197 +1043,26 @@ group("the leech fields survive a round trip")
 
 group("answering late credits the wait")
 {
-  // If a card was due in ten days, you did not see it for fifty, and you still
-  // knew it, your memory holds it for something like fifty days and not ten.
-  // Anki puts half the lateness into Good's base and all of it into Easy's.
-  const late = (days, ivl = 10, ease = 2500) => Object.assign(G.newState(),
-    { phase: "review", interval: ivl * G.DAY, ease, reps: 5, due: NOW - days * G.DAY })
-  const d = (state, g) => G.grade(state, g, NOW).interval / G.DAY
-
-  t("on time is unchanged", d(late(0), "good") === 25)
-  t("twenty days late credits ten", d(late(20), "good") === 50)
-  t("forty days late credits twenty", d(late(40), "good") === 75)
-  t("a hundred days late credits fifty", d(late(100), "good") === 150)
-
-  // Anki floors the halving, so an odd number of days late credits the lower
-  // whole day rather than half of one.
-  t("an odd lateness floors the half", d(late(5), "good") === 30)
-  t("five and four days late credit the same", d(late(5), "good") === d(late(4), "good"))
-
-  t("easy takes all of the lateness", d(late(20), "easy") === 97.5)
-  t("easy on time is unchanged", d(late(0), "easy") === 32.5)
-
-  // Hard is the deliberate exception: a struggle is not evidence of
-  // comfortable recall, however long the gap was.
-  t("hard credits nothing",
-    d(late(0), "hard") === 12 && d(late(40), "hard") === 12 && d(late(200), "hard") === 12)
-
-  // Early is not a penalty. Anki floors the lateness at zero rather than
-  // letting a card answered ahead of schedule shrink.
-  const early = Object.assign(G.newState(),
-    { phase: "review", interval: 10 * G.DAY, ease: 2500, reps: 5, due: NOW + 30 * G.DAY })
-  t("answering early earns nothing, and costs nothing", d(early, "good") === 25)
-  t("daysLate never goes negative", G.daysLate(early, NOW) === 0)
-  t("daysLate counts whole days", G.daysLate(late(7), NOW) === 7)
-
-  // A part-day does not round up into a day of credit.
-  const halfDay = Object.assign(G.newState(),
-    { phase: "review", interval: 10 * G.DAY, ease: 2500, reps: 5, due: NOW - G.DAY * 1.5 })
-  t("a part day is not counted", G.daysLate(halfDay, NOW) === 1)
-
-  // Only a review card can be late in the sense that matters: a learning
-  // card's steps are fixed minutes and lateness there is evidence of nothing.
-  const learning = Object.assign(G.newState(),
-    { phase: "learning", step: 0, due: NOW - 400 * G.DAY })
-  t("a learning card is never late", G.daysLate(learning, NOW) === 0)
-  t("a very overdue learning card still takes its step",
-    G.grade(learning, "good", NOW).due === NOW + 10 * G.MINUTE)
-
-  // A relearning card leaves on the interval it kept, lateness or not.
-  const relearning = Object.assign(G.newState(),
-    { phase: "relearning", interval: 50 * G.DAY, reps: 6, due: NOW - 400 * G.DAY })
-  t("leaving relearning ignores lateness",
-    G.grade(relearning, "good", NOW).interval === 50 * G.DAY)
-
-  // The credit is unbounded in Anki apart from the maximum interval, and a
-  // progress file is not trusted input - a nonsense due date must land on the
-  // clamp rather than somewhere absurd.
-  const ancient = Object.assign(G.newState(),
-    { phase: "review", interval: G.DAY, ease: 2500, reps: 5, due: 0 })
-  const huge = G.grade(ancient, "good", NOW).interval
-  t("an impossible lateness still lands inside the maximum interval",
-    isFinite(huge) && huge > 0 && huge <= G.MAX_INTERVAL)
-
-  // And one where the credit really does run past the cap.
-  const ancientLong = Object.assign(G.newState(),
-    { phase: "review", interval: 5000 * G.DAY, ease: 2500, reps: 5, due: 0 })
-  t("a credit past the cap is clamped to it",
-    G.grade(ancientLong, "good", NOW).interval === G.MAX_INTERVAL)
+  // Recalling a card long after it was due is evidence it is held for longer
+  // than it was scheduled for; FSRS's stability grows more for it.
+  const late = (days) => G.normalizeState({ phase: "review", interval: 10 * DAY, ease: 2500, reps: 5,
+                                             due: NOW - days * DAY })
+  const d = (days, g = "good") => G.grade(late(days), g, NOW).interval / DAY
+  t("a late good earns a longer gap than an on-time one", d(20) > d(0))
+  t("and the later, the longer", d(60) > d(20))
+  t("a late easy too", d(20, "easy") > d(0, "easy"))
+  t("answering early earns less", G.grade(late(-5), "good", NOW).interval < G.grade(late(0), "good", NOW).interval)
 }
 
 group("the three passing grades stay in order")
 {
-  // Anki computes them as a chain, each floored a day above the one below, so
-  // a harsher grade can never schedule a longer gap than a kinder one.
-  const cases = [
-    { ivl: 1, ease: G.MIN_EASE, late: 0 },
-    { ivl: 1, ease: G.MIN_EASE, late: 400 },
-    { ivl: 3, ease: G.MIN_EASE, late: 0 },
-    { ivl: 10, ease: 2500, late: 0 },
-    { ivl: 10, ease: 2500, late: 40 },
-    { ivl: 200, ease: 3000, late: 900 },
-  ]
-
-  let ordered = true, moved = true
-  for (const c of cases) {
-    const st = Object.assign(G.newState(), { phase: "review", interval: c.ivl * G.DAY,
-      ease: c.ease, reps: 9, due: NOW - c.late * G.DAY })
-    for (let i = 0; i <= 20; i++) {
-      const roll = i / 20
-      const h = G.grade(st, "hard", NOW, roll).interval
-      const g = G.grade(st, "good", NOW, roll).interval
-      const e = G.grade(st, "easy", NOW, roll).interval
-      if (!(h < g && g < e)) ordered = false
-      if (!(h > st.interval)) moved = false
-    }
+  let ordered = true
+  for (const ivl of [1, 3, 10, 40, 200]) for (const ease of [1300, 2500, 3000]) for (const lateBy of [0, 5, 30]) {
+    const s = G.normalizeState({ phase: "review", interval: ivl * DAY, ease, reps: 5, due: NOW - lateBy * DAY })
+    const [h, g, e] = ["hard", "good", "easy"].map((x) => G.grade(s, x, NOW).interval)
+    ordered = ordered && h <= g && g <= e
   }
-  t("hard is always shorter than good, and good than easy", ordered)
-  t("even hard always moves the card further out", moved)
-
-  // The floor is a day above the rung below, which is what makes the ordering
-  // survive a short interval where every multiplier rounds to nothing.
-  const stuck = Object.assign(G.newState(),
-    { phase: "review", interval: G.DAY, ease: G.MIN_EASE, reps: 9, lapses: 4, due: NOW })
-  t("a stuck card is pushed out one rung at a time",
-    G.grade(stuck, "hard", NOW).interval === 2 * G.DAY &&
-    G.grade(stuck, "good", NOW).interval === 3 * G.DAY &&
-    G.grade(stuck, "easy", NOW).interval === 4 * G.DAY)
-
-  // constrainIvl on its own: spread first, then floored, then clamped.
-  t("the floor is a day above what is passed in",
-    G.constrainIvl(G.DAY, 10 * G.DAY) === 11 * G.DAY)
-  t("a value above the floor is left alone",
-    G.constrainIvl(50 * G.DAY, 10 * G.DAY) === 50 * G.DAY)
-  t("the maximum interval still wins",
-    G.constrainIvl(G.MAX_INTERVAL * 2, G.DAY) === G.MAX_INTERVAL)
-}
-
-group("ease is applied after the interval is chosen")
-{
-  // Anki picks the interval before it updates the factor, so all three grades
-  // use the factor the card arrived with. Easy's bonus multiplies the old
-  // factor rather than the one the same answer is about to earn.
-  const st = Object.assign(G.newState(),
-    { phase: "review", interval: 10 * G.DAY, ease: 2500, reps: 5, due: NOW })
-  const r = G.grade(st, "easy", NOW)
-
-  t("easy still earns its ease", r.ease === 2650)
-  t("but the interval used the old factor",
-    r.interval === 10 * G.DAY * 2.5 * 1.3)
-  t("which is not what the new factor would give",
-    r.interval !== 10 * G.DAY * 2.65 * 1.3)
-
-  // Same on the way down: hard's interval does not pay its own ease cost.
-  const h = G.grade(st, "hard", NOW)
-  t("hard costs ease", h.ease === 2350)
-  t("hard's interval is the flat multiplier, not the reduced factor",
-    h.interval === 12 * G.DAY)
-}
-
-group("how much a lapse costs is a setting")
-{
-  const held = (ivl) => Object.assign(G.newState(),
-    { phase: "review", interval: ivl * G.DAY, ease: 2500, reps: 20, due: NOW })
-  const kept = (ivl, opts) => G.grade(held(ivl), "again", NOW, undefined, opts).interval / G.DAY
-
-  t("the default keeps half", kept(100) === 50)
-  t("and says so in one place", G.LAPSE_PERCENT === 50)
-
-  t("0% is Anki's default and sends the card back to a day", kept(100, { lapsePercent: 0 }) === 1)
-  t("100% keeps the whole interval", kept(100, { lapsePercent: 100 }) === 100)
-  t("70% keeps seven tenths", kept(100, { lapsePercent: 70 }) === 70)
-
-  // The floor is clampInterval's, which is also Anki's pairing of a 0% new
-  // interval with a one-day minimum.
-  t("a short interval cannot be reduced below a day",
-    kept(1, { lapsePercent: 0 }) === 1 && kept(2, { lapsePercent: 10 }) === 1)
-
-  // Out of range is meaningless in one direction and perverse in the other:
-  // forgetting a card must never lengthen it.
-  t("a negative share is clamped to zero", kept(100, { lapsePercent: -50 }) === 1)
-  t("a share above 100 cannot lengthen the card", kept(100, { lapsePercent: 500 }) === 100)
-  t("a nonsense share falls back to the default",
-    kept(100, { lapsePercent: "x" }) === 50 && kept(100, {}) === 50 && kept(100) === 50)
-
-  t("the fraction itself is clamped",
-    G.lapseFactor({ lapsePercent: 0 }) === 0 &&
-    G.lapseFactor({ lapsePercent: 100 }) === 1 &&
-    G.lapseFactor({ lapsePercent: 250 }) === 1 &&
-    G.lapseFactor(null) === 0.5)
-
-  // The setting changes only the interval carried through relearning. The
-  // lapse itself, the ease it costs, and the step it lands on are unchanged.
-  for (const pct of [0, 50, 100]) {
-    const r = G.grade(held(100), "again", NOW, undefined, { lapsePercent: pct })
-    t(`at ${pct}% the lapse still costs ease and relearns`,
-      r.ease === 2300 && r.lapses === 1 && r.phase === "relearning" &&
-      r.due === NOW + 10 * G.MINUTE)
-  }
-
-  // Which means the priced Again label is the same at every setting: it shows
-  // the relearning step, not the interval waiting on the other side of it.
-  t("the Again label does not move with the setting",
-    G.previewIntervals(held(100), NOW).again === "10m")
-
-  // Leaving relearning restores whatever the lapse kept, so the setting is
-  // what decides where the card lands when it comes back.
-  const after = (pct) => {
-    const lapsed = G.grade(held(100), "again", NOW, undefined, { lapsePercent: pct })
-    return G.grade(lapsed, "good", NOW + 600).interval / G.DAY
-  }
-  t("leaving relearning restores the kept interval", after(50) === 50)
-  t("at 0% the card comes back at a day", after(0) === 1)
-  t("at 100% the card comes back where it was", after(100) === 100)
+  t("hard ≤ good ≤ easy for every card", ordered)
 }
 
 

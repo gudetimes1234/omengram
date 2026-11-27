@@ -59,8 +59,7 @@ Item {
   readonly property int leechThreshold:
       Anki.sanePerDay(root.pluginSettings.leechThreshold, Anki.LEECH_THRESHOLD)
   readonly property bool leechSuspend: root.pluginSettings.leechSuspend !== false
-  readonly property int lapsePercent:
-      Anki.sanePerDay(root.pluginSettings.lapsePercent, Anki.LAPSE_PERCENT)
+  readonly property int retention: Anki.saneRetention(root.pluginSettings.retention)
   readonly property bool ankiEnabled: root.pluginSettings.anki !== false
   readonly property string ankiProfile: String(root.pluginSettings.ankiProfile || "")
 
@@ -389,7 +388,7 @@ Item {
             reviewsPerDay: root.reviewsPerDay
             leechThreshold: root.leechThreshold
             leechSuspend: root.leechSuspend
-            lapsePercent: root.lapsePercent
+            retention: root.retention
             tags: root.tags
             ankiEnabled: root.ankiEnabled
             ankiProfile: root.ankiProfile

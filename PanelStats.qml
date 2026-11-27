@@ -301,8 +301,8 @@ Item {
         width: parent.width
         wrapMode: Text.Wrap
         text: root.stats
-            ? "ease " + root.stats.ease.toFixed(2)
-              + "  ·  " + Anki.percent(root.stats.retention) + " " + (root.stats.retentionLabel || "never relearned")
+            ? [Anki.memoryLine(root.stats), Anki.percent(root.stats.retention) + " "
+                + (root.stats.retentionLabel || "never relearned")].filter(Boolean).join("  ·  ")
               + "  ·  " + root.stats.lapsed + " lapsed"
             : ""
         color: root.foreground

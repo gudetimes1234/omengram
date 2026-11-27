@@ -1,6 +1,11 @@
+.import "Fsrs.js" as Fsrs
+
 // Scheduling and deck logic for omengram. Kept free of QML types so the
 // algorithm is readable on its own and testable under plain node, leaving the
 // .qml files as presentation only.
+//
+// The scheduler itself is FSRS-6 (Fsrs.js); this file keeps omengram's card
+// state, its leech and suspension rules, and everything around the deck.
 
 var MINUTE = 60
 var HOUR = 3600
@@ -11,40 +16,23 @@ var DAY = 86400
 // one the clock just started.
 var ROLLOVER_HOUR = 4
 
-// A new card is shown again after a minute, then after ten, then it graduates.
-// Short enough that both steps land inside one sitting.
+// A new card is shown again after a minute, then after ten, then it graduates;
+// a forgotten one comes back after ten minutes. FSRS's own steps, in seconds.
 var LEARNING_STEPS = [1 * MINUTE, 10 * MINUTE]
 var RELEARNING_STEPS = [10 * MINUTE]
 
-var GRADUATING_INTERVAL = 1 * DAY
-var EASY_INTERVAL = 4 * DAY
-
-// Ease is carried in permille so the arithmetic stays in integers; 2500 is
-// SM-2's starting factor of 2.5.
+// Ease belongs to SM-2, the scheduler before FSRS, and to Anki's cards. It is
+// kept here to read old progress (see migrate) and to show Anki's cards.
 var STARTING_EASE = 2500
 var MIN_EASE = 1300
 var MAX_EASE = 3000
 
-var HARD_MULTIPLIER = 1.2
-var EASY_BONUS = 1.3
-// How much of a lapsed card's interval survives the lapse, as a percentage.
-//
-// Anki calls this "New interval" and defaults it to 0%, which sends a forgotten
-// card back to the minimum interval - a day - however long it had been holding.
-// That is a real position: the card was forgotten, so the spacing that produced
-// the forgetting has been disproved.
-//
-// This defaults to 50% instead, which is a common choice among Anki users for
-// the opposite reason: one slip on a card held for months is weak evidence
-// against months of successful recall, and starting over throws away the rest.
-//
-// Neither is obviously right, which is exactly why Anki makes it a setting
-// rather than a constant, and why this does too. A percentage rather than a
-// fraction because that is the way Anki words it and because it keeps the
-// setting an integer.
-var LAPSE_PERCENT = 50
+// The share of reviews FSRS aims to have you pass: 90%, Anki's default. Lower
+// means longer gaps and more forgetting; higher, the reverse at a steep cost.
+var RETENTION = 90
+var MIN_RETENTION = 70
+var MAX_RETENTION = 99
 
-var MIN_REVIEW_INTERVAL = 1 * DAY
 var MAX_INTERVAL = 36500 * DAY
 
 var GRADES = ["again", "hard", "good", "easy"]
@@ -90,19 +78,6 @@ function isLeechLapse(lapses, threshold) {
   return (lapses - lf) % Math.max(1, Math.floor(lf / 2)) === 0
 }
 
-// The share of the interval a lapse keeps, as a fraction. Clamped to 0-100%: a
-// negative share is meaningless and one above 100 would make forgetting a card
-// lengthen it.
-//
-// At 0% the multiplication gives nothing and clampInterval floors the result at
-// one day, which is exactly Anki's pairing of a 0% new interval with a one-day
-// minimum. The minimum is not separately configurable here; Anki exposes it,
-// but a day is the only value that has ever made sense for it.
-function lapseFactor(opts) {
-  var o = opts || {}
-  return Math.max(0, Math.min(100, Math.round(num(o.lapsePercent, LAPSE_PERCENT)))) / 100
-}
-
 // Leech settings, defaulted. Kept in one place because grade() and the surfaces
 // both need them and a disagreement would be invisible.
 function leechConfig(opts) {
@@ -113,77 +88,25 @@ function leechConfig(opts) {
   }
 }
 
-function clampInterval(seconds) {
-  return Math.max(MIN_REVIEW_INTERVAL, Math.min(MAX_INTERVAL, Math.round(seconds)))
-}
-
-// Cards answered in one sitting come due in one sitting, and answering them
-// together again keeps them together — a deck studied in a few sessions
-// collapses into a few permanent clumps. Anki spreads each interval over a
-// small band around itself to break that up, widening with the interval, and
-// these are its ranges.
-//
-// The roll is handed in rather than drawn here so that grade() stays pure: the
-// same state, grade and roll always produce the same answer. That is what lets
-// previewIntervals price all four buttons by calling grade() itself — it
-// passes no roll, so the labels show the unfuzzed interval and hold still
-// under the cursor instead of flickering on every repaint.
-function fuzzInterval(seconds, roll) {
-  var r = Number(roll)
-  if (!isFinite(r)) return seconds        // no roll: previews, and the tests
-  r = Math.max(0, Math.min(0.999999, r))
-
-  var days = Math.round(seconds / DAY)
-  if (days < 2) return seconds            // a day cannot be spread anywhere
-
-  var low, high
-  if (days === 2) {
-    // Anki's one asymmetric case: never pull a 2-day card back to 1 day.
-    low = 2
-    high = 3
-  } else {
-    var band
-    if (days < 7) band = Math.floor(days * 0.25)
-    else if (days < 30) band = Math.max(2, Math.floor(days * 0.15))
-    else band = Math.max(4, Math.floor(days * 0.05))
-    band = Math.max(1, band)
-    low = days - band
-    high = days + band
-  }
-
-  return clampInterval((low + Math.floor(r * (high - low + 1))) * DAY)
-}
-
-// How many whole days later than scheduled this answer is. Anki counts in days
-// and never below zero: answering early earns no credit, and must not be turned
-// into a penalty either.
-//
-// Only a review card can be late in the sense that matters. A learning card is
-// measured in minutes and its steps are fixed, so lateness there is not
-// evidence of anything.
-function daysLate(state, now) {
-  if (state.phase !== "review") return 0
-  return Math.max(0, Math.floor((now - state.due) / DAY))
-}
-
-// Anki's _constrainedIvl. Every successful answer has to move the card further
-// out than the grade below it, even when the multiplier rounds to nothing —
-// otherwise a card with a short interval and a low ease can sit at the same
-// spacing forever, and a harsher grade can end up scheduling a longer gap than
-// a kinder one.
-//
-// Spreading happens before the floor, not after, which is also Anki's order. A
-// band reaching below the floor is meant to be cut off by it; spreading
-// afterwards would push a grade back under the one it has to beat.
-function constrainIvl(seconds, floorSeconds, roll) {
-  return clampInterval(Math.max(fuzzInterval(seconds, roll), floorSeconds + DAY))
+// The retention setting as a percentage, kept inside FSRS's sensible range.
+function saneRetention(value) {
+  var n = Math.round(num(value, RETENTION))
+  return Math.max(MIN_RETENTION, Math.min(MAX_RETENTION, n))
 }
 
 function newState() {
   return {
     phase: "new",
     due: 0,
+    // Seconds from the last answer to the due date of a card in review; 0
+    // while learning. What the header and the maturity split read.
     interval: 0,
+    // FSRS's memory of the card: how many days until recall falls to 90%, and
+    // how hard it is, 1 to 10. Both null until the first answer.
+    stability: null,
+    difficulty: null,
+    lastReview: 0,
+    // SM-2's factor, from before FSRS. Carried, never used to schedule.
     ease: STARTING_EASE,
     reps: 0,
     lapses: 0,
@@ -209,6 +132,27 @@ function num(value, fallback) {
   return isFinite(n) ? n : fallback
 }
 
+function memoryNumber(value, lo, hi) {
+  if (value === null || value === undefined || value === "") return null
+  var n = Number(value)
+  return isFinite(n) && n > 0 ? Math.max(lo, Math.min(hi, n)) : null
+}
+
+// A card answered under SM-2, before FSRS, has an interval and an ease but no
+// memory state. FSRS's interval at 90% retention is about its stability, so
+// the days the card was holding become its stability, and ease maps onto
+// difficulty: 2.5, SM-2's start, is the middle, 5; the lowest ease is the
+// hardest card. The card keeps its due date, so nothing moves until it is
+// next answered. Deterministic, so both surfaces migrate a card the same way.
+function migrate(s) {
+  if (s.stability !== null || (s.phase !== "review" && s.phase !== "relearning")) return s
+  var days = s.interval / DAY
+  s.stability = Math.max(0.1, days)
+  s.difficulty = Math.max(1, Math.min(10, 10 - 5 * (s.ease - MIN_EASE) / (STARTING_EASE - MIN_EASE)))
+  if (!s.lastReview) s.lastReview = Math.max(0, s.due - s.interval)
+  return s
+}
+
 // State comes off disk, where anything running as the user could have written
 // it, so every field is coerced back into range before it reaches the
 // scheduler. A nonsense phase is treated as a new card: re-learning something
@@ -220,10 +164,16 @@ function normalizeState(state) {
   if (["new", "learning", "review", "relearning"].indexOf(phase) === -1) return newState()
 
   var steps = phase === "relearning" ? RELEARNING_STEPS : LEARNING_STEPS
-  return {
+  var stability = memoryNumber(state.stability, 0.001, 36500 * 10)
+  var difficulty = memoryNumber(state.difficulty, 1, 10)
+  return migrate({
     phase: phase,
     due: Math.max(0, num(state.due, 0)),
     interval: Math.max(0, Math.min(MAX_INTERVAL, num(state.interval, 0))),
+    // Memory is both numbers or neither: half a memory state is not one.
+    stability: stability !== null && difficulty !== null ? stability : null,
+    difficulty: stability !== null && difficulty !== null ? difficulty : null,
+    lastReview: Math.max(0, num(state.lastReview, 0)),
     ease: clampEase(num(state.ease, STARTING_EASE)),
     reps: Math.max(0, Math.round(num(state.reps, 0))),
     lapses: Math.max(0, Math.round(num(state.lapses, 0))),
@@ -235,35 +185,53 @@ function normalizeState(state) {
     // suspended just silently stops appearing.
     leech: state.leech === true,
     suspended: state.suspended === true
-  }
+  })
 }
+
+var FSRS_STATE = { "new": 1, learning: 1, review: 2, relearning: 3 }
+var PHASE = { 1: "learning", 2: "review", 3: "relearning" }
 
 // Answer one card. Returns the next state and never mutates the one passed in,
 // so a caller can price every button (see previewIntervals) before committing
 // to any of them.
 //
-// `roll` is an optional number in [0, 1) used to spread the resulting interval
-// (see fuzzInterval). Omitting it means no spreading, which is what pricing a
-// button wants; the one call site that actually commits an answer passes one.
+// `roll` is an optional number in [0, 1) that FSRS uses to spread a review
+// interval over a few days, so cards answered together do not stay clumped
+// together. Omitting it means no spreading, which is what pricing a button
+// wants; the one call site that actually commits an answer passes one.
 //
-// `opts` carries the settings a grade depends on: `lapsePercent` (see
-// LAPSE_PERCENT) and the leech pair (see leechConfig). Both take effect only on
-// Again, and neither is visible in a priced label: Again's label is the
-// relearning step, ten minutes, whatever the lapse keeps or the leech rule
-// decides. So previewIntervals leaves opts out along with the roll, and the
-// four numbers under the buttons stay true for any settings.
+// `opts` carries the settings: `retention` (a percentage, see RETENTION) and
+// the leech pair (see leechConfig). The leech rule only acts on Again, which
+// its label never shows, so previewIntervals passes only the retention.
 function grade(state, g, now, roll, opts) {
   var s = normalizeState(state)
   if (!isGrade(g)) return s
+  var o = opts || {}
+
+  var cfg = Fsrs.config({
+    desiredRetention: saneRetention(o.retention) / 100,
+    fuzz: isFinite(Number(roll)) && roll !== null && roll !== undefined
+  })
+  var card = {
+    state: FSRS_STATE[s.phase],
+    step: s.phase === "review" ? -1 : (s.phase === "new" ? 0 : s.step),
+    stability: s.stability,
+    difficulty: s.difficulty,
+    lastReview: s.lastReview
+  }
+  var r = Fsrs.review(card, GRADES.indexOf(g) + 1, now, cfg, Math.max(0, Math.min(0.999999, num(roll, 0))))
 
   var next = {
-    phase: s.phase,
-    due: s.due,
-    interval: s.interval,
+    phase: PHASE[r.state],
+    due: r.due,
+    interval: r.state === Fsrs.REVIEW ? r.due - now : 0,
+    stability: r.stability,
+    difficulty: r.difficulty,
+    lastReview: now,
     ease: s.ease,
     reps: s.reps + 1,
     lapses: s.lapses,
-    step: s.step,
+    step: Math.max(0, r.step),
     updated: now,
     // Only the answer that ends a card's life as "new" dates it. A card
     // already in review keeps whatever it had, so re-answering an old card
@@ -275,151 +243,29 @@ function grade(state, g, now, roll, opts) {
     suspended: s.suspended
   }
 
-  // ------------------------------------------------- new and learning cards
-  // Nothing here touches ease: a card you have not learned yet has no history
-  // to judge it by, so it graduates on the fixed intervals instead.
-  if (s.phase === "new" || s.phase === "learning") {
-    var at = s.phase === "new" ? 0 : s.step
-
-    if (g === "again") {
-      next.phase = "learning"
-      next.step = 0
-      next.interval = 0
-      next.due = now + LEARNING_STEPS[0]
-    } else if (g === "hard") {
-      // Repeat the step rather than advance: hard means it was recalled, but
-      // not well enough to earn a longer gap.
-      next.phase = "learning"
-      next.step = at
-      next.interval = 0
-      next.due = now + LEARNING_STEPS[at]
-    } else if (g === "good") {
-      var step = at + 1
-      if (step >= LEARNING_STEPS.length) {
-        next.phase = "review"
-        next.step = 0
-        // Graduating is a day, which has nowhere to spread to; fuzzed anyway
-        // so that a longer first interval would be spread if one were set.
-        next.interval = fuzzInterval(GRADUATING_INTERVAL, roll)
-        next.due = now + next.interval
-      } else {
-        next.phase = "learning"
-        next.step = step
-        next.interval = 0
-        next.due = now + LEARNING_STEPS[step]
-      }
-    } else {
-      // Easy skips the remaining steps entirely.
-      next.phase = "review"
-      next.step = 0
-      next.interval = fuzzInterval(EASY_INTERVAL, roll)
-      next.due = now + next.interval
-    }
-    return next
-  }
-
-  // ------------------------------------------------------- relearning cards
-  // The interval was already cut when the card lapsed, so leaving relearning
-  // restores that reduced interval rather than starting over at a day. It is
-  // restored as it was, unspread: it is an interval this card already had, not
-  // a newly computed one, and Anki leaves this case alone too.
-  if (s.phase === "relearning") {
-    if (g === "again") {
-      next.step = 0
-      next.due = now + RELEARNING_STEPS[0]
-      return next
-    }
-    if (g === "hard") {
-      next.due = now + RELEARNING_STEPS[s.step]
-      return next
-    }
-
-    var rstep = s.step + 1
-    if (g === "easy" || rstep >= RELEARNING_STEPS.length) {
-      next.phase = "review"
-      next.step = 0
-      next.interval = clampInterval(s.interval)
-      next.due = now + next.interval
-    } else {
-      next.step = rstep
-      next.due = now + RELEARNING_STEPS[rstep]
-    }
-    return next
-  }
-
-  // ------------------------------------------------------------ review cards
-  if (g === "again") {
-    // A lapse costs ease and some of the interval, and sends the card back
-    // through a short relearning step before it counts as known again. How much
-    // of the interval it costs is `lapsePercent`; see LAPSE_PERCENT.
+  // Only forgetting a card in review is a lapse, so this is the only place a
+  // leech is made. The card is still scheduled normally underneath:
+  // suspending hides it rather than rewriting what it would do, so restoring
+  // one puts it back exactly where the scheduler had it.
+  if (s.phase === "review" && g === "again") {
     next.lapses = s.lapses + 1
-    next.ease = clampEase(s.ease - 200)
-    next.interval = clampInterval(s.interval * lapseFactor(opts))
-    next.phase = "relearning"
-    next.step = 0
-    next.due = now + RELEARNING_STEPS[0]
-
-    // Only a review card can lapse, so this is the only place a leech is made.
-    // The card is still scheduled normally underneath: suspending hides it
-    // rather than rewriting what it would do, so restoring one puts it back
-    // exactly where the scheduler had it rather than at the start.
-    var leech = leechConfig(opts)
+    var leech = leechConfig(o)
     if (isLeechLapse(next.lapses, leech.threshold)) {
       next.leech = true
       if (leech.suspend) next.suspended = true
     }
-    return next
   }
-
-  // The three passing grades are one chain, each floored a day above the one
-  // below it, because that is how Anki computes them and the floors are what
-  // keep them in order once spreading is applied.
-  //
-  // Lateness is the other half of it. If a card was due in ten days, you did
-  // not see it for fifty, and you still knew it, then your memory holds it for
-  // something like fifty days and not ten — scheduling from the ten throws away
-  // the evidence the answer just produced. Good credits half the lateness and
-  // Easy all of it. Hard credits none: a struggle is not evidence of
-  // comfortable recall, however long the gap was.
-  var lateDays = daysLate(s, now)
-  var halfLate = Math.floor(lateDays / 2) * DAY   // Anki floors this division
-  var fullLate = lateDays * DAY
-
-  // Anki picks the interval before it updates the ease, so all three use the
-  // factor the card arrived with — including Easy, whose bonus multiplies the
-  // old factor rather than the one the same answer is about to earn.
-  var factor = s.ease / 1000
-
-  // The chain shares one roll where Anki draws a fresh one per rung. Only the
-  // rung being returned is ever kept; the others exist to be floors, and a
-  // floor only binds on very short intervals, where one roll for the chain is
-  // if anything the steadier choice. Drawing three would mean handing grade()
-  // three rolls to stay as pure as it is.
-  var hardIvl = constrainIvl(s.interval * HARD_MULTIPLIER, s.interval, roll)
-  if (g === "hard") {
-    next.ease = clampEase(s.ease - 150)
-    next.interval = hardIvl
-  } else {
-    var goodIvl = constrainIvl((s.interval + halfLate) * factor, hardIvl, roll)
-    if (g === "good") {
-      next.interval = goodIvl
-    } else {
-      next.ease = clampEase(s.ease + 150)
-      next.interval = constrainIvl((s.interval + fullLate) * factor * EASY_BONUS, goodIvl, roll)
-    }
-  }
-
-  next.due = now + next.interval
   return next
 }
 
 // What each button would cost, for the labels under them. Anki shows these and
 // they are most of what makes a grade choice meaningful rather than a guess.
-function previewIntervals(state, now) {
+function previewIntervals(state, now, opts) {
   var out = {}
+  var o = { retention: (opts || {}).retention }
   for (var i = 0; i < GRADES.length; i++) {
     var g = GRADES[i]
-    out[g] = formatInterval(grade(state, g, now).due - now)
+    out[g] = formatInterval(grade(state, g, now, undefined, o).due - now)
   }
   return out
 }
@@ -598,7 +444,9 @@ function sectionLabel(phase, state, tags, decks) {
   else if (state.phase === "relearning")
     head = "RELEARNING  ·  " + state.lapses + " lapse" + (state.lapses === 1 ? "" : "s")
   else
-    head = "REVIEW  ·  " + formatInterval(state.interval) + "  ·  ease " + (state.ease / 1000).toFixed(2)
+    head = "REVIEW  ·  " + formatInterval(state.interval) + "  ·  " + (state.difficulty
+        ? "difficulty " + state.difficulty.toFixed(1)
+        : "ease " + (state.ease / 1000).toFixed(2))
 
   var scope = scopeLabel(decks, tags)
   return scope ? head + "  ·  " + scope : head
@@ -1393,8 +1241,10 @@ function deckStats(cards, progress, now, newPerDay, reviewsPerDay) {
     reps: 0,
     lapses: 0,
     lapsed: 0,       // cards that have lapsed at least once
-    easeSum: 0,
+    easeSum: 0,      // Anki's cards only; see mergeStats
     easeCount: 0,
+    difficultySum: 0,
+    difficultyCount: 0,
     leeches: 0,      // flagged as a leech at some point, restored or not
     suspended: 0,    // currently out of the rotation
     answeredToday: 0,
@@ -1423,8 +1273,7 @@ function deckStats(cards, progress, now, newPerDay, reviewsPerDay) {
     out.reps += s.reps
     out.lapses += s.lapses
     if (s.lapses > 0) out.lapsed++
-    out.easeSum += s.ease
-    out.easeCount++
+    if (s.difficulty) { out.difficultySum += s.difficulty; out.difficultyCount++ }
 
     if (s.updated > 0 && dayKey(s.updated) === today) out.answeredToday++
 
@@ -1441,7 +1290,8 @@ function deckStats(cards, progress, now, newPerDay, reviewsPerDay) {
   }
 
   out.seen = out.total - out.fresh
-  out.ease = out.easeCount ? out.easeSum / out.easeCount / 1000 : 0
+  out.ease = 0
+  out.difficulty = out.difficultyCount ? out.difficultySum / out.difficultyCount : 0
 
   // Rough retention: how often an answered card has *not* had to be relearned.
   // With no review log this is the honest approximation available — it is a
@@ -1773,8 +1623,18 @@ function mergeCounts(json, anki) {
 }
 
 var STAT_SUMS = ["total", "fresh", "learning", "young", "mature", "reps", "lapses", "lapsed",
-                 "easeSum", "easeCount", "leeches", "suspended", "answeredToday",
+                 "easeSum", "easeCount", "difficultySum", "difficultyCount", "leeches", "suspended", "answeredToday",
                  "introducedToday", "reviewsToday", "seen"]
+
+// How hard the cards are, for the statistics line: FSRS difficulty (1 to 10)
+// for omengram's own cards, ease for Anki's, both when the scope mixes them.
+function memoryLine(stats) {
+  var st = stats || {}
+  var parts = []
+  if (num(st.difficultyCount, 0) > 0) parts.push("difficulty " + num(st.difficulty, 0).toFixed(1))
+  if (num(st.easeCount, 0) > 0) parts.push("ease " + num(st.ease, 0).toFixed(2))
+  return parts.join("  ·  ")
+}
 
 // The statistics tabs for both sides. Retention means different things on
 // each: the library has no review log, so its figure is a lifetime one, while
@@ -1791,6 +1651,7 @@ function mergeStats(json, anki) {
   for (var d = 0; d < 7; d++)
     out.forecast.push(num((j.forecast || [])[d], 0) + num((a.forecast || [])[d], 0))
   out.ease = out.easeCount ? out.easeSum / out.easeCount / 1000 : 0
+  out.difficulty = out.difficultyCount ? out.difficultySum / out.difficultyCount : 0
   var jw = hasJ ? num(j.reps, 0) : 0
   var aw = hasA ? num(a.retentionReviews, 0) : 0
   out.retention = jw + aw > 0 ? (num(j.retention, 0) * jw + num(a.retention, 0) * aw) / (jw + aw) : 0

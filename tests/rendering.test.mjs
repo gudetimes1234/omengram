@@ -99,9 +99,10 @@ group("the parser deliberately does not sanitise")
   // the parser is expected to hand markup through untouched — these tests
   // exist so nobody "fixes" this by stripping tags and quietly corrupting
   // legitimate cards.
-  const src = readFileSync(join(root, "Anki.js"), "utf8")
+  // The QML import of Fsrs.js is not JavaScript; parsing needs no scheduler.
+  const src = readFileSync(join(root, "Anki.js"), "utf8").replace(/^\.import .*$/m, "")
   const G = {}
-  new Function("exports", `${src}\nexports.parseDeck = parseDeck`)(G)
+  new Function("exports", "Fsrs", `${src}\nexports.parseDeck = parseDeck`)(G, {})
 
   const hostile = '<img src="http://example.invalid/pixel.png">'
   const deck = G.parseDeck(JSON.stringify({ cards: [{ front: hostile, back: "<b>x</b>" }] }))

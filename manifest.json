@@ -29,7 +29,7 @@
       "showCount": true,
       "leechThreshold": 8,
       "leechSuspend": true,
-      "lapsePercent": 50,
+      "retention": 90,
       "anki": true,
       "ankiProfile": "",
       "syncInterval": 15
@@ -77,14 +77,14 @@
         "description": "Show the number of waiting cards next to the bar glyph."
       },
       {
-        "key": "lapsePercent",
+        "key": "retention",
         "type": "integer",
-        "label": "Interval kept on a lapse",
-        "min": 0,
-        "max": 100,
-        "step": 5,
-        "defaultValue": 50,
-        "description": "How much of a forgotten card's interval survives, as a percentage. 0 sends it back to a single day, which is Anki's default."
+        "label": "Target retention",
+        "min": 70,
+        "max": 99,
+        "step": 1,
+        "defaultValue": 90,
+        "description": "The share of reviews FSRS schedules you to pass, as a percentage. Higher means shorter gaps and more reviews. Library cards only; Anki's cards follow Anki's deck options."
       },
       {
         "key": "leechThreshold",
