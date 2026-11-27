@@ -23,6 +23,11 @@ one is answered in the other. Either way the loop is the same: question, space
 to reveal, then one of four grades, each labelled with when the card would
 come back.
 
+A card can also be a **drill**, GleamDrill-style: in the overlay you type the
+answer or the code, compare it line by line with the solution, run the card's
+tests in a sandbox, or build the solution a line at a time in Line Drill. See
+[Drills](#drills). The bar panel shows drills as plain recall.
+
 ![Choosing decks in omengram](preview.png)
 
 ## Install
@@ -199,6 +204,22 @@ same restart clears it.
 | `r` | Reload the deck from disk |
 | `esc` | Close |
 
+In the overlay, a drill adds:
+
+| Key | Where | Does |
+|-----|-------|------|
+| `i` | on the card | Back to typing |
+| `t` | on the card | Run the tests |
+| `Ctrl+Enter` | editor | Check: show the answer and the diff |
+| `Ctrl+R` | editor | Run the tests |
+| `Tab` / `Shift+Tab` | editor | Indent / outdent |
+| `Enter` | Line Drill | Check the line |
+| `Ctrl+H` / `Ctrl+Y` | Line Drill | The line's hint / why |
+| `Ctrl+E` | Line Drill | Show the line |
+| `Ctrl+P` | Line Drill | Another pattern (`Enter` to switch, `Esc` not to) |
+| `Ctrl+L` | either | Switch between free typing and Line Drill |
+| `Esc` | either | Hand the keys back to the card |
+
 Same keys on both surfaces, apart from `a`: the composer is a form, and a form
 typed into a popup that closes when it loses focus is not a trade worth making.
 `Super + Ctrl + J` toggles the overlay; the bar glyph toggles the panel.
@@ -311,8 +332,8 @@ Each file is a list of cards:
 }
 ```
 
-A bare `[ ... ]` array works too. Entries missing a front or a back are
-skipped rather than shown blank, and the panel says so if the file does not
+A bare `[ ... ]` array works too. Entries missing a front or a back (or, for
+a code drill, an answer) are skipped rather than shown blank, and the panel says so if the file does not
 parse. Press `r` in the panel, or just close and reopen it, to pick up edits.
 
 [`cards.example.json`](cards.example.json) in this repo is a working deck in
@@ -336,6 +357,103 @@ back, reconciled per card by which entry changed most recently, and only then
 replaced. Without that, whichever surface saved last would erase whatever the
 other had just answered.
 
+## Drills
+
+A drill is a card answered by doing rather than recalling. It is a card in a
+deck file like any other, with a few more fields:
+
+```json
+{
+  "id": "sample:has-repeat",
+  "kind": "code",
+  "lang": "python",
+  "front": "Has Repeat\n\nReturn true if any value in the list appears twice.",
+  "back": "Keep what you have seen; a repeat is a value already kept.",
+  "answer": "def has_repeat(values):\n    seen = set()\n    ...",
+  "harness": "...",
+  "complexity": "O(n) time",
+  "patterns": [ ... ]
+}
+```
+
+| Field | Does |
+|-------|------|
+| `kind` | `"type"`: type a short answer, compared with `back`. `"code"`: type code in `lang`, compared with `answer`. Anything else is a plain card. |
+| `lang` | The code's language. Only `python` can run its tests. |
+| `answer` | The solution, for a code drill. A code drill's `back` is optional and reads as notes under it. |
+| `alternates` | Other solutions, `[{ "label", "answer" }]`. |
+| `harness` | The tests: Python that calls your function through `__case__(label, expected, actual)` into `__results__`, GleamDrill's harness format. `__source__` holds your code. |
+| `complexity`, `nudge` | Shown with the answer, and as a first hint. |
+| `patterns` | Line Drill: ways to write the solution, each with `steps`, pseudocode `notes` (`id`, `step`, `pseudo`, `hint`, `why`) and `lines`, each `{ "given": "..." }` (shown) or `{ "text": "...", "indent": 4, "notes": [1] }` (typed). |
+
+[`cards.example.json`](cards.example.json) has one of each.
+
+### In the overlay
+
+A drill opens ready for typing, and the editor keeps its own keys: a `1` typed
+into it is a 1, not "Again". `Esc` hands the keys back to the card, `i` returns
+to the editor.
+
+- **Free typing.** Type the answer and press `Ctrl+Enter`. The answer is shown
+  with a line diff of what you typed against it: lines in both, lines you missed
+  (`+`), lines you wrote that it does not have (`-`). Spacing inside a line does
+  not matter, and in code the indentation does. `Tab` and `Shift+Tab` indent,
+  `Enter` keeps the indentation and adds a level after a `:`.
+- **Running the tests.** `Ctrl+R` (or `t` outside the editor) runs what you
+  typed against the card's tests and lists each case, passed or not, with what
+  your code printed. It does not reveal the answer.
+- **Line Drill.** The solution's shape, as blanks as wide as their lines, filled
+  one line at a time: `Enter` checks the line, `Ctrl+H` and `Ctrl+Y` show the
+  hint and the why, `Ctrl+E` shows the line, `Ctrl+P` offers another pattern.
+  The blanks follow whichever pattern your lines are writing, and each line
+  you get right is explained. The last line in shows the answer.
+
+New and relearning drills open in Line Drill, reviews in free typing; `Ctrl+L`
+switches. Pressing `space` without typing just shows the answer, as recall.
+
+Nothing here grades for you: the diff and the tests are there to look at, and
+the grade is yours as on any card. The review log records how each drill was
+answered (`recall`, `free` or `line`), whether the answer was shown before it
+was produced, and how many tests passed.
+
+### In the bar panel
+
+The panel is too narrow to type code in, so a drill there is recall: the
+question, then the solution and its notes. Set `drillsInPanel` to `false` to
+leave drills to the overlay.
+
+### Running the tests
+
+`bin/omengram-run` runs what you typed, with the card's tests, inside
+bubblewrap, and nowhere else: if bwrap is missing or cannot start, it says so
+and runs nothing. Inside, the code sees a read-only `/usr`, an empty `/tmp`,
+no network, none of your files, and no environment, and it has no
+capabilities. It is stopped after 8 seconds (6 of CPU), and is limited to 1 GiB
+of memory, 1 MiB per file, 64 open files and 64 processes, so an endless loop
+or a fork bomb ends as "stopped". Moving to another card stops a run that is
+still going.
+
+A case passes when `repr(expected) == repr(actual)`, as in GleamDrill. The
+results are for you to look at; they never grade the card.
+
+### From GleamDrill
+
+`tools/import_gleamdrill.py` turns a GleamDrill checkout
+into decks: its NeetCode 150 track in Python, each problem with its
+solution, alternates, notes, tests and Line Drill patterns, one deck per group
+under `Drills/python/`.
+
+```bash
+python3 -I tools/import_gleamdrill.py ~/github/gleamdrill --verify
+```
+
+`--verify` first runs every solution and alternate against its tests in the
+sandbox, and writes nothing if one fails. `--dry-run` says what it would write.
+It only ever replaces decks it wrote itself (they carry
+`"source": "gleamdrill-import"`), so a deck of yours by the same name is left
+alone, and running it again after GleamDrill changes updates the decks and
+keeps your progress: a card's id is its problem, not its text.
+
 ## Settings
 
 Set these on the plugin's entry in `~/.config/omarchy/shell.json`; it
@@ -352,6 +470,7 @@ hot-reloads on save.
 | `tags` | *(none)* | Restrict the session to cards carrying any of these tags. Set from the picker. |
 | `reviewsPerDay` | `0` | Cap how many due cards a day serves. `0` means no cap. |
 | `retention` | `90` | The share of reviews FSRS schedules you to pass, as a percentage (70–99). Higher means shorter gaps. |
+| `drillsInPanel` | `true` | Show drills in the bar panel, as recall. `false` leaves them to the overlay. |
 | `leechThreshold` | `8` | Lapses before a card counts as a leech. `0` turns leeches off. |
 | `leechSuspend` | `true` | Take a leech out of the rotation rather than only marking it. |
 | `anki` | `true` | Study Anki's collection beside the library. |
@@ -477,23 +596,9 @@ the one thing that uses the network, and only to AnkiWeb.
 
 `node` is needed to run the test suite, but never to use the plugin.
 
-Running a code drill's tests (Ctrl+R in the editor, or `t`) needs `python3`
-and `bubblewrap` (`bwrap`). Without bwrap the tests refuse to run; everything
-else works.
-
-### Running a drill's tests
-
-`bin/omengram-run` runs what you typed, with the card's tests, inside
-bubblewrap, and nowhere else: if bwrap is missing or cannot start, it says so
-and runs nothing. Inside, the code sees a read-only `/usr`, an empty `/tmp`,
-no network, none of your files, and no environment, and it has no
-capabilities. It is stopped after 8 seconds (6 of CPU), and is limited to 1 GiB
-of memory, 1 MiB per file, 64 open files and 64 processes, so an endless loop
-or a fork bomb ends as "stopped". Moving to another card stops a run that is
-still going.
-
-A case passes when `repr(expected) == repr(actual)`, as in GleamDrill. The
-results are for you to look at; they never grade the card.
+Running a code drill's tests needs `python3` and `bubblewrap` (`bwrap`).
+Without bwrap the tests refuse to run; everything else works. See
+[Running the tests](#running-the-tests).
 
 ### What it writes
 
@@ -669,6 +774,15 @@ properties checked over seeded random typing.
 | `StatsTabs.qml` | The tab strip, which rides on the panel's section header. |
 | `StudyPicker.qml` | Decks, tags and limits, behind `d` in the bar panel. |
 | `tools/import_anki.py` | Copies an Anki collection into the library, once. |
+| `Fsrs.js` | FSRS-6, ported from GleamDrill and checked against py-fsrs. |
+| `ReviewLog.qml` | The append-only review log, and reading it back for the statistics. |
+| `Drill.js` | Comparing typed answers, the editor's helpers, and Line Drill's state. No QML types. |
+| `DrillEditor.qml` | The editor a drill is typed into, keeping its own keys. |
+| `LineDrill.qml` | Line Drill: the blanks, the hints, the patterns. |
+| `DiffView.qml`, `CodeView.qml` | A typed answer against the solution; code in monospace. |
+| `Runner.qml`, `RunResults.qml` | Running a drill's tests through `bin/omengram-run`, and the results. |
+| `bridge/run.py` | The test runner: the solution and its tests, inside bubblewrap. |
+| `tools/import_gleamdrill.py` | Turns a GleamDrill checkout into drill decks. |
 | `AnkiSource.qml` | Anki's side of a session: its next card, counts and decks. |
 | `AnkiBridge.qml` | The connection to `bin/omengram-anki`, one process per surface. |
 | `AnkiSync.qml` | Syncing with AnkiWeb, and the timer the bar runs. |

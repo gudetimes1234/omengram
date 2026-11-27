@@ -115,7 +115,13 @@ Item {
     return out
   }
   readonly property var pickedCards: Anki.mergeDecks(root.library, root.scopeDecks)
-  readonly property var cards: Anki.filterByTags(root.pickedCards, root.tags)
+  // Leave drill cards out of this surface (the bar panel, when its setting
+  // says so); the overlay always has them.
+  property bool skipDrills: false
+  readonly property var cards: {
+    var picked = Anki.filterByTags(root.pickedCards, root.tags)
+    return root.skipDrills ? picked.filter(function(c) { return !c.drill }) : picked
+  }
   readonly property var caps: ({ limits: root.limits, library: root.allCards })
 
   // How many Anki cards the selection covers, and how many there are at all.

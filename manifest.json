@@ -30,6 +30,7 @@
       "leechThreshold": 8,
       "leechSuspend": true,
       "retention": 90,
+      "drillsInPanel": true,
       "anki": true,
       "ankiProfile": "",
       "syncInterval": 15
@@ -85,6 +86,13 @@
         "step": 1,
         "defaultValue": 90,
         "description": "The share of reviews FSRS schedules you to pass, as a percentage. Higher means shorter gaps and more reviews. Library cards only; Anki's cards follow Anki's deck options."
+      },
+      {
+        "key": "drillsInPanel",
+        "type": "boolean",
+        "label": "Drills in the bar panel",
+        "defaultValue": true,
+        "description": "Show drill cards in the bar panel too, answered from memory. Off leaves them to the overlay, where they are typed, run and line-drilled."
       },
       {
         "key": "leechThreshold",

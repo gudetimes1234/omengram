@@ -27,6 +27,7 @@ Panel {
   readonly property int leechThreshold: Anki.sanePerDay(root.setting("leechThreshold", Anki.LEECH_THRESHOLD), Anki.LEECH_THRESHOLD)
   readonly property bool leechSuspend: root.setting("leechSuspend", true) !== false
   readonly property int retention: Anki.saneRetention(root.setting("retention", Anki.RETENTION))
+  readonly property bool drillsInPanel: root.setting("drillsInPanel", true) !== false
   // The count is the point of the widget, but a bar that has to stay narrow
   // can turn it off and keep the glyph.
   readonly property bool showCount: root.setting("showCount", true) !== false
@@ -405,6 +406,7 @@ Panel {
           leechThreshold: root.leechThreshold
           leechSuspend: root.leechSuspend
           retention: root.retention
+          skipDrills: !root.drillsInPanel
           tags: root.tags
           ankiEnabled: root.ankiEnabled
           ankiProfile: root.ankiProfile
