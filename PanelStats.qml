@@ -293,17 +293,14 @@ Item {
         }
       }
 
-      // Ease and retention are deck-wide rather than today's, but they are the
-      // two numbers that answer "is this working", which is the question the
+      // Memory and retention are deck-wide rather than today's, but they are
+      // the numbers that answer "is this working", which is the question the
       // rest of this tab is about.
       Text {
         textFormat: Text.PlainText
         width: parent.width
         wrapMode: Text.Wrap
-        text: root.stats
-            ? [Anki.memoryLine(root.stats), Anki.retentionText(root.stats)].filter(Boolean).join("  ·  ")
-              + "  ·  " + root.stats.lapsed + " lapsed"
-            : ""
+        text: root.stats ? Anki.healthLine(root.stats, "lapsed") : ""
         color: root.foreground
         opacity: 0.45
         font.family: root.fontFamily

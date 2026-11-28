@@ -328,8 +328,7 @@ Item {
         width: parent.width
         wrapMode: Text.Wrap
         text: root.stats
-            ? [Anki.memoryLine(root.stats), Anki.retentionText(root.stats)].filter(Boolean).join("  ·  ")
-              + "  ·  " + root.stats.lapsed + (root.stats.lapsed === 1 ? " lapsed card" : " lapsed cards")
+            ? Anki.healthLine(root.stats, root.stats.lapsed === 1 ? "lapsed card" : "lapsed cards")
             : ""
         color: root.foreground
         opacity: 0.5
@@ -337,12 +336,14 @@ Item {
         font.pixelSize: Style.font.bodySmall
       }
 
-      // Retention has no review log behind it, and saying so is cheaper than
-      // letting someone read it as Anki's number.
+      // Before the review log has anything in it, the library's retention is
+      // a lifetime figure, and saying so is cheaper than letting someone read
+      // it as a monthly one.
       Text {
         textFormat: Text.PlainText
         width: parent.width
         wrapMode: Text.Wrap
+        visible: !!root.stats && root.stats.seen > 0 && root.stats.retentionLabel === "never relearned"
         text: "A lifetime figure per card, not a rolling window."
         color: root.foreground
         opacity: 0.3

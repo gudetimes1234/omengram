@@ -1936,10 +1936,21 @@ function retentionText(stats) {
   return percent(st.retention) + " " + (st.retentionLabel || "never relearned")
 }
 
-// The statistics tabs for both sides. Retention means different things on
-// each: the library has no review log, so its figure is a lifetime one, while
-// Anki's is the share of reviews passed over the last month. Each is weighted
-// by what it was measured on, and the label says which it is.
+// The "is this working" line. Before anything has been answered there is no
+// memory and no retention to report, and "0% never relearned" reads as a deck
+// that is failing rather than one that has not started.
+function healthLine(stats, lapsedNoun) {
+  var st = stats || {}
+  if (!(num(st.seen, 0) > 0)) return "no reviews yet"
+  return [memoryLine(st), retentionText(st), num(st.lapsed, 0) + " " + lapsedNoun]
+      .filter(Boolean).join("  ·  ")
+}
+
+// The statistics tabs for both sides. Retention can mean different things on
+// each: the library's comes from its review log, the share of reviews passed
+// over the last month, unless there is no log yet, when it is a lifetime
+// figure per card; Anki's is always the last month's. Each is weighted by
+// what it was measured on, and the label says which it is.
 function mergeStats(json, anki) {
   var j = json || {}
   var a = anki || {}

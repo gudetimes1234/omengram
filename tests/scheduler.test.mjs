@@ -36,7 +36,7 @@ const EXPORTS = [
   "LEECH_THRESHOLD", "isLeechLapse", "leechConfig", "unsuspendAll",
   "RETENTION", "saneRetention", "migrate", "memoryLine",
   "LOG_RECORD_LIMIT", "LOG_READ_LIMIT", "APPEND_SH", "LOGTAIL_SH", "logName", "logNames", "logRecord",
-  "undoRecord", "serializeRecord", "parseLog", "logRetention", "retentionText",
+  "undoRecord", "serializeRecord", "parseLog", "logRetention", "retentionText", "healthLine",
   "parseDrill", "drillAnswer",
   "LIST_SH", "deckMatches", "pathMatches", "normalizeDecks", "scopeLabel", "resolveDeckDir",
   "parseListing", "buildDeckTree", "nodeState", "toggleDeck", "toggleTag", "assignDeck",
@@ -1196,6 +1196,14 @@ group("retention from the log")
   t("no reviews yet says so", G.retentionText(none) === "no reviews in the last 30 days")
   const both = G.mergeStats(s, { total: 5, retention: 1, retentionReviews: 4, retentionDays: 30 })
   t("with Anki's, weighted by reviews", both.retention === 0.875 && both.retentionLabel === "passed, last 30 days")
+
+  t("a deck nothing has been answered in says so", G.healthLine(none, "lapsed") === "no reviews yet")
+  t("and so does no stats at all", G.healthLine(null, "lapsed") === "no reviews yet")
+  t("once answered, retention and lapses",
+    G.healthLine({ ...m, seen: 1, lapsed: 2 }, "lapsed cards") === "75% passed, last 30 days  ·  2 lapsed cards")
+  const ankiOnly = G.mergeStats(G.deckStats([], { reviews: {} }, NOW, 20, 0, []),
+                                { total: 5, fresh: 2, seen: 3, lapsed: 0, retention: 1, retentionReviews: 4, retentionDays: 30 })
+  t("cards answered only in Anki count as answered", G.healthLine(ankiOnly, "lapsed") !== "no reviews yet")
 }
 
 group("appending to the log")
