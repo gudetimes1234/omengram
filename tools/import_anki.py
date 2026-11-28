@@ -4,6 +4,7 @@
     tools/import_anki.py                       # into ~/.local/share/omengram
     tools/import_anki.py --dry-run
     tools/import_anki.py --force               # replace files already there
+    tools/import_anki.py --apkg shared.apkg    # a deck someone sent you
 
 Each Anki deck becomes a file and `::` becomes a folder, so the tree in Anki is
 the tree in the picker. Cards are rendered through their own templates, which is
@@ -18,6 +19,11 @@ it is writing might not be a whole one.
 
 Every card carries an id made from its note, so importing again, or moving a
 deck's file, keeps the progress made on it here.
+
+An .apkg (a deck exported from Anki or downloaded from AnkiWeb) is read the
+same way: Anki's own importer loads it into a new, empty collection in the
+temporary directory, and the cards come out of that. Anki can stay open for
+this, since its collection is not read at all.
 
 Needs Anki's Python library; the official Linux build's own is used if it is at
 /usr/local/share/anki (or $OMENGRAM_ANKI_DIR).
@@ -290,35 +296,63 @@ def open_copy(source, workdir):
     db.execute("pragma wal_checkpoint(truncate)")
     db.close()
 
+    return anki_lib().Collection(copy)
+
+
+def open_package(package, workdir):
+    """A new collection in `workdir` holding just what `package` brings, with
+    none of its scheduling: the cards start new here either way."""
+    a = anki_lib()
+    col = a.Collection(os.path.join(workdir, "collection.anki2"))
+    try:
+        col.import_anki_package(a.ImportAnkiPackageRequest(
+            package_path=package,
+            options=a.ImportAnkiPackageOptions(with_scheduling=False, with_deck_configs=False,
+                                               merge_notetypes=True)))
+    except Exception as e:
+        col.close()
+        sys.exit("Anki could not read %s: %s" % (package, e))
+    return col
+
+
+def anki_lib():
     pkgs = os.path.join(ANKI_DIR, "app_packages")
-    if os.path.isdir(pkgs):
+    if os.path.isdir(pkgs) and pkgs not in sys.path:
         sys.path.insert(0, pkgs)
     try:
-        from anki.collection import Collection
+        import anki.collection
     except ImportError as e:
         sys.exit("Can't load Anki's Python library (%s). Run this with Anki's own Python:\n"
                  "  %s/python/bin/python3 %s" % (e, ANKI_DIR, sys.argv[0]))
-    return Collection(copy)
+    return anki.collection
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--profile", default="User 1", help="Anki profile (default: %(default)s)")
     ap.add_argument("--collection", help="path to a collection.anki2, instead of a profile")
+    ap.add_argument("--apkg", help="an Anki package (.apkg) to import, instead of a collection")
     ap.add_argument("-o", "--output", default="~/.local/share/omengram", help="library (default: %(default)s)")
     ap.add_argument("--force", action="store_true", help="replace deck files that already exist")
     ap.add_argument("--dry-run", action="store_true", help="say what would be written, and write nothing")
     args = ap.parse_args()
 
-    source = os.path.expanduser(args.collection or os.path.join(ANKI_BASE, args.profile, "collection.anki2"))
-    if not os.path.isfile(source):
-        sys.exit("No Anki collection at " + source)
-    if not args.collection and anki_running():
-        sys.exit("Anki is open. Close it first, so the copy is a whole one.")
+    if args.apkg and args.collection:
+        sys.exit("Give --apkg or --collection, not both.")
+    if args.apkg:
+        source = os.path.abspath(os.path.expanduser(args.apkg))
+        if not os.path.isfile(source):
+            sys.exit("No package at " + source)
+    else:
+        source = os.path.expanduser(args.collection or os.path.join(ANKI_BASE, args.profile, "collection.anki2"))
+        if not os.path.isfile(source):
+            sys.exit("No Anki collection at " + source)
+        if not args.collection and anki_running():
+            sys.exit("Anki is open. Close it first, so the copy is a whole one.")
 
     report = Report()
     with tempfile.TemporaryDirectory(prefix="omengram-import-") as tmp:
-        col = open_copy(source, tmp)
+        col = open_package(source, tmp) if args.apkg else open_copy(source, tmp)
         try:
             files = files_for(collect(col, report))
         finally:

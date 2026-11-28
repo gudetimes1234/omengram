@@ -1560,8 +1560,8 @@ group("nothing answers to the plugin this was forked from")
 {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..")
   const shipped = ["manifest.json", ...readdirSync(root).filter((f) => /\.(qml|js)$/.test(f)),
-    ...["tools", "bridge", "anki-addon", "bin"].flatMap((d) =>
-      readdirSync(join(root, d)).filter((f) => /\.py$|^[a-z-]+$/.test(f)).map((f) => d + "/" + f))]
+    ...["tools", "bridge", "anki-addon", "bin", "skills/apkg-to-omengram"].flatMap((d) =>
+      readdirSync(join(root, d)).filter((f) => /\.(py|md)$|^[a-z-]+$/.test(f)).map((f) => d + "/" + f))]
   t("there are files to check", shipped.length > 10)
   for (const f of shipped)
     t(f, !/omanki|yamz8/i.test(readFileSync(join(root, f), "utf8")))

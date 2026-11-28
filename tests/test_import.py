@@ -143,6 +143,57 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(imp.to_text(imp.drop_typing_boxes("<div>Why?<textarea></textarea></div>")), "Why?")
         self.assertEqual(imp.drop_typing_boxes("<b>x</b>"), "<b>x</b>")
 
+    def package(self, legacy=False):
+        """Export the throwaway collection as an .apkg, as Anki's own Export would."""
+        from anki.collection import ExportAnkiPackageOptions
+        path = os.path.join(self.dir, "shared.apkg")
+        self.col.export_anki_package(out_path=path, limit=None, options=ExportAnkiPackageOptions(
+            with_scheduling=False, with_deck_configs=False, with_media=False, legacy=legacy))
+        self.col.close()
+        self.col = None
+        return path
+
+    def run_package(self, path, *args, ok=True):
+        r = subprocess.run([sys.executable, SCRIPT, "--apkg", path, "-o", self.out, *args],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode == 0, ok, r.stdout + r.stderr)
+        return r.stdout + r.stderr
+
+    def test_a_package(self):
+        self.run_package(self.package())
+        (card,) = self.deck("infra/a-b.json")
+        self.assertEqual((card["front"], card["back"], card["tags"]), ("q", "l1\nl2", ["sd::caching"]))
+        self.assertEqual(len(self.deck("cloze.json")), 2)
+
+    def test_a_legacy_package(self):
+        self.run_package(self.package(legacy=True))
+        self.assertEqual([c["front"] for c in self.deck("rev.json")], ["one", "two"])
+
+    def test_a_package_keeps_the_ids_its_collection_gives(self):
+        path = self.package()
+        self.run_import()
+        from_collection = sorted(c["id"] for c in self.deck("rev.json") + self.deck("cloze.json"))
+        shutil.rmtree(self.out)
+        self.run_package(path)
+        from_package = sorted(c["id"] for c in self.deck("rev.json") + self.deck("cloze.json"))
+        self.assertEqual(from_package, from_collection)
+
+    def test_a_package_is_left_alone(self):
+        path = self.package()
+        with open(path, "rb") as f:
+            before = f.read()
+        self.run_package(path)
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), before)
+
+    def test_not_a_package(self):
+        bad = os.path.join(self.dir, "bad.apkg")
+        with open(bad, "w") as f:
+            f.write("not a zip")
+        self.assertIn("could not read", self.run_package(bad, ok=False))
+        self.assertIn("No package", self.run_package(bad + ".missing", ok=False))
+        self.assertFalse(os.path.exists(self.out))
+
     def test_names(self):
         self.assertEqual(imp.deck_path("a::..hidden::x/y"), "a/hidden/x-y")
         self.assertEqual(imp.deck_path("gleamdrill: one"), "gleamdrill - one")
