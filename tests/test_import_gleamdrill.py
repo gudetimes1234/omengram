@@ -208,7 +208,7 @@ class ImportTest(unittest.TestCase):
         import run as runner
         probe = runner.run({"solution": "def f(): pass", "harness": "__results__ = []"})
         if probe["status"] == "unavailable":
-            self.skipTest("bwrap cannot run its sandbox here")
+            self.skipTest("bwrap cannot run its sandbox here: %s" % probe.get("message"))
         r = self.run_tool("--verify")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         # The brute force variant returns False for everything; the solution

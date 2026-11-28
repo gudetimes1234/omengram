@@ -126,6 +126,23 @@ def unavailable(message):
     return {"status": "unavailable", "message": message}
 
 
+# The top-level directories programs are loaded from, laid out as the host has
+# them: on Arch /lib64 is a link to usr/lib, on Debian and Ubuntu to usr/lib64,
+# and on a system without the /usr merge they are directories of their own.
+ROOT_DIRS = ("bin", "sbin", "lib", "lib32", "lib64", "libx32")
+
+
+def root_layout():
+    args = []
+    for name in ROOT_DIRS:
+        path = "/" + name
+        if os.path.islink(path):
+            args += ["--symlink", os.readlink(path), path]
+        elif os.path.isdir(path):
+            args += ["--ro-bind", path, path]
+    return args
+
+
 def sandbox_command(work):
     bwrap = shutil.which("bwrap")
     if not bwrap:
@@ -136,8 +153,7 @@ def sandbox_command(work):
         "--unshare-all", "--die-with-parent", "--new-session",
         "--clearenv", "--setenv", "PATH", "/usr/bin", "--setenv", "LANG", "C.UTF-8",
         "--ro-bind", "/usr", "/usr",
-        "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib", "/lib64",
-        "--symlink", "usr/bin", "/bin",
+    ] + root_layout() + [
         "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
         "--ro-bind", work, "/work", "--chdir", "/tmp",
         "--cap-drop", "ALL",

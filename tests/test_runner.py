@@ -49,8 +49,11 @@ def run(solution, harness=HARNESS, env=None, **extra):
     return json.loads(lines[0])
 
 
-SANDBOX = run(GOOD)["status"] != "unavailable"
-needs_sandbox = unittest.skipUnless(SANDBOX, "bwrap cannot run its sandbox here")
+PROBE = run(GOOD)
+SANDBOX = PROBE["status"] != "unavailable"
+if not SANDBOX:
+    sys.stderr.write("sandbox unavailable: %s\n" % PROBE.get("message"))
+needs_sandbox = unittest.skipUnless(SANDBOX, "bwrap cannot run its sandbox here: %s" % PROBE.get("message"))
 
 
 @needs_sandbox
