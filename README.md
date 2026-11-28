@@ -77,8 +77,9 @@ change saved as it is made:
 `↑` `↓` move, `space` ticks (or switches between the two numbers on Limits),
 `+` `-` change a limit, `c` clears it, `←` `→` change tab, `esc` goes back.
 
-The overlay studies the same selection. The header names it (`NEW · infra ·
-#sd`), so a short session is never mistaken for an empty library.
+The overlay studies the same selection. The header names it
+(`NEW · infra · #sd`), so a short session is never mistaken for an empty
+library.
 
 ## Studying your Anki collection
 
@@ -143,6 +144,19 @@ become `[image]`. **They start as new cards on omengram's schedule and nothing i
 written back to Anki** — only a temporary copy of the collection is opened, and
 Anki has to be closed. Existing files are not replaced without `--force`. Cards
 carry an id made from their note, so importing again keeps their progress.
+
+A deck someone sent you, or one from AnkiWeb's shared decks, comes in the same
+way from its `.apkg`:
+
+```bash
+/usr/local/share/anki/python/bin/python3 tools/import_anki.py --apkg deck.apkg --dry-run
+/usr/local/share/anki/python/bin/python3 tools/import_anki.py --apkg deck.apkg
+```
+
+Anki's own importer loads the package into a new collection in a temporary
+directory, so Anki can stay open and your collection is never touched. The
+package's scheduling is left behind. `skills/apkg-to-omengram/` is an agent
+skill that runs this for you and explains what came over.
 
 ## Placing it and binding it
 
@@ -686,13 +700,16 @@ The scheduler is deliberately free of QML types, so it runs under plain node:
 
 ```bash
 node tests/scheduler.test.mjs
+node tests/fsrs.test.mjs
+node tests/rendering.test.mjs
 ```
 
-That covers the learning steps, interval growth and spreading, the credit for
-answering late and the order the three passing grades keep, lapses at every
-setting and the recovery from them, leeches and restoring them, the clamps,
-deck parsing, an oversized deck being reported as such, queue order, the 4am
-rollover, document merging, and the hardening on both file-I/O snippets.
+The first covers FSRS from the plugin's side (learning steps, lapses, the
+order the grades keep, carrying SM-2 progress over), leeches and restoring
+them, deck parsing and the picker, limits, queue order, the 4am rollover,
+document merging, the review log, the statistics, and the hardening on the
+file-I/O snippets. The second checks every FSRS value against py-fsrs's own
+output; the third, that no text on a card can be read as markup.
 
 Those tests are pure: they know nothing about processes, files, or two
 surfaces being open at once. Every bug this plugin has actually shipped lived
@@ -729,6 +746,7 @@ The deck, `shell.json` and your scheduling progress are backed up and restored
 on exit, including on an interrupt. The deck it uses is the one your settings
 point at, not the default path — it reads `deck` from `shell.json` the way the
 plugin does, and prints all three paths when it starts.
+
 Assertions poll rather than sleep: every action starts a read, a merge and a
 write, so a fixed sleep tests the machine's mood rather than the plugin.
 
@@ -738,6 +756,7 @@ yours, under Anki's own Python:
 ```bash
 /usr/local/share/anki/python/bin/python3 -I tests/test_bridge.py
 /usr/local/share/anki/python/bin/python3 -I tests/test_sync.py
+/usr/local/share/anki/python/bin/python3 -I tests/test_import.py
 ```
 
 The sync tests use a fake AnkiWeb, a fake login, and a fake Anki window for
@@ -754,10 +773,12 @@ python3 tests/test_import_gleamdrill.py
 prlimit --core=1:1 -- python3 tests/test_runner.py
 tests/qml/run.sh drill-keys
 tests/qml/run.sh line-drill
+tests/qml/run.sh stats-line
 ```
 
-The last two type into drills with real key presses in an off-screen
-Quickshell; they need a Wayland session to start in, so they are local only.
+The `tests/qml` ones run the real views in an off-screen Quickshell, typing
+into drills with real key presses; they need a Wayland session to start in,
+so they are local only.
 The Line Drill tests port GleamDrill's own, on made-up patterns, with the same
 properties checked over seeded random typing.
 
@@ -765,32 +786,37 @@ properties checked over seeded random typing.
 
 | File | What it is |
 |------|------------|
-| `Anki.js` | Scheduling, deck parsing, settings, file I/O snippets. No QML types. |
+| **Surfaces** | |
+| `Panel.qml` | The bar widget and the panel chrome around the session. |
+| `Omengram.qml` | The fullscreen overlay chrome around the same session. |
 | `Reviewer.qml` | The session: deck, progress, queue, persistence, card face. |
 | `GradeButtons.qml` | The four priced grade buttons, shared by both surfaces. |
 | `CardComposer.qml` | The add-a-card form behind `a`, in the overlay only. |
-| `StatsView.qml` | The statistics behind `s` in the overlay, on one page. |
-| `PanelStats.qml` | The same numbers in tabs, for the width the bar panel has. |
-| `StatsTabs.qml` | The tab strip, which rides on the panel's section header. |
 | `StudyPicker.qml` | Decks, tags and limits, behind `d` in the bar panel. |
-| `tools/import_anki.py` | Copies an Anki collection into the library, once. |
+| `StatsView.qml` | The statistics behind `s` in the overlay, on one page. |
+| `PanelStats.qml`, `StatsTabs.qml` | The same numbers in tabs for the bar panel, and their tab strip. |
+| **Scheduling** | |
+| `Anki.js` | Scheduling, deck parsing, settings, statistics, file I/O snippets. No QML types. |
 | `Fsrs.js` | FSRS-6, ported from GleamDrill and checked against py-fsrs. |
 | `ReviewLog.qml` | The append-only review log, and reading it back for the statistics. |
+| **Drills** | |
 | `Drill.js` | Comparing typed answers, the editor's helpers, and Line Drill's state. No QML types. |
 | `DrillEditor.qml` | The editor a drill is typed into, keeping its own keys. |
 | `LineDrill.qml` | Line Drill: the blanks, the hints, the patterns. |
 | `DiffView.qml`, `CodeView.qml` | A typed answer against the solution; code in monospace. |
 | `Runner.qml`, `RunResults.qml` | Running a drill's tests through `bin/omengram-run`, and the results. |
 | `bridge/run.py` | The test runner: the solution and its tests, inside bubblewrap. |
-| `tools/import_gleamdrill.py` | Turns a GleamDrill checkout into drill decks. |
+| **Anki** | |
 | `AnkiSource.qml` | Anki's side of a session: its next card, counts and decks. |
 | `AnkiBridge.qml` | The connection to `bin/omengram-anki`, one process per surface. |
-| `AnkiSync.qml` | Syncing with AnkiWeb, and the timer the bar runs. |
-| `SyncStatus.qml` | The sync line and its button. |
+| `AnkiSync.qml`, `SyncStatus.qml` | Syncing with AnkiWeb, the timer the bar runs, and the sync line. |
 | `bridge/` | The Python side, run under Anki's Python: reading and answering cards, syncing. |
 | `anki-addon/` | The add-on that lets all of it go through Anki while Anki is open. |
-| `Panel.qml` | The bar widget and the panel chrome around the session. |
-| `Omengram.qml` | The fullscreen overlay chrome around the same session. |
+| **Bringing decks in** | |
+| `tools/import_anki.py` | Copies an Anki collection, or an `.apkg`, into the library. |
+| `tools/import_gleamdrill.py` | Turns a GleamDrill checkout into drill decks. |
+| `skills/apkg-to-omengram/` | An agent skill that imports an `.apkg` for you. |
+| `tools/gen_fsrs_vectors.py` | Regenerates the FSRS test vectors from py-fsrs. |
 
 `Reviewer` and `GradeButtons` know nothing about what is hosting them — the
 host owns sizing — so the rules and the review loop exist once rather than once
